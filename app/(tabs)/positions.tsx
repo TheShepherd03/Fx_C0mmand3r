@@ -7,8 +7,7 @@ import {
   SafeAreaView,
   TouchableOpacity,
   ActivityIndicator,
-  Alert,
-  RefreshControl
+  Alert
 } from 'react-native';
 import { Position } from '@/constants/types';
 import { useAccount } from '@/contexts/AccountContext';
@@ -125,13 +124,9 @@ export default function PositionsScreen() {
         action: 'OPEN_POSITION',
         symbol: selectedPosition.symbol,
         type: selectedPosition.type,
-        orderType: selectedPosition.type === 0 ? 'BUY_LIMIT' : 'SELL_LIMIT', // Use limit orders for immediate execution
         lots: scaledLots,
-        price: selectedPosition.currentPrice || selectedPosition.openPrice, // Use current or open price for limit order
         sl: selectedPosition.sl,
         tp: selectedPosition.tp,
-        scaleFactor: scaleFactor,
-        originalTicket: selectedPosition.ticket,
         status: 'PENDING',
         timestamp: Math.floor(Date.now() / 1000)
       };
@@ -142,7 +137,7 @@ export default function PositionsScreen() {
       const commandRef = ref(database, `commands/${selectedAccount}/latest`);
       await set(commandRef, command);
 
-      Alert.alert("Debug", `Scaling command sent to Firebase.\nPath: commands/${selectedAccount}/latest\nAction: OPEN_POSITION\nLots: ${scaledLots}`);
+      Alert.alert("Success", `Position scaling command sent for ${selectedPosition.symbol}.\nNew lot size: ${scaledLots}`);
       setModalVisible(false);
     } catch (error) {
       console.error('Scale command error:', error);

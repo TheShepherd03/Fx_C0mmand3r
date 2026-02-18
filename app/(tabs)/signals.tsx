@@ -78,7 +78,7 @@ export default function SignalsScreen() {
     // Show confirmation dialog
     Alert.alert(
       "Execute Signal",
-      `Execute ${signal.symbol} ${signal.type} signal with minimum lot size (0.01) using ${signal.type === 'BUY' ? 'BUY_STOP' : 'SELL_STOP'} order?`,
+      `Execute ${signal.symbol} ${signal.type} signal with minimum lot size (0.01)?`,
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -92,13 +92,9 @@ export default function SignalsScreen() {
                 action: 'OPEN_POSITION',
                 symbol: signal.symbol,
                 type: signal.type === 'BUY' ? 0 : 1, // Convert string to number
-                orderType: signal.type === 'BUY' ? 'BUY_STOP' : 'SELL_STOP', // Use stop orders for immediate execution
                 lots: 0.01, // Minimum lot size as requested
-                price: signal.price, // Entry price for the stop order
                 sl: signal.sl || 0,
                 tp: signal.tp || 0,
-                signalId: signal.id,
-                strategy: signal.strategy,
                 status: 'PENDING',
                 timestamp: Math.floor(Date.now() / 1000)
               };

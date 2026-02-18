@@ -10,7 +10,7 @@ import { useTheme } from '@/contexts/ThemeContext';
 
 export default function DashboardScreen() {
   const { data, loading, error } = useAccountData();
-  const { history, loading: historyLoading } = useHistoryData();
+  const { history } = useHistoryData();
   const { theme } = useTheme();
 
   const formatCurrency = (val: number | undefined) => {
@@ -28,10 +28,13 @@ export default function DashboardScreen() {
       <ScrollView contentContainerStyle={styles.scrollContent}>
 
         {/* Header */}
-        <View style={styles.header}>
-          <Text style={[styles.title, { color: theme.colors.text }]}>TradeCommand</Text>
+        <View style={[styles.header, { backgroundColor: theme.colors.surface }]}>
+          <View style={styles.titleContainer}>
+            <Text style={[styles.title, { color: theme.colors.text }]}>FX</Text>
+            <Text style={[styles.titleAccent, { color: theme.colors.primary }]}>Commander</Text>
+          </View>
           <View style={styles.headerRight}>
-            <View style={styles.statusContainer}>
+            <View style={[styles.statusContainer, { backgroundColor: theme.colors.card, borderColor: theme.colors.border }]}>
               <View style={[styles.statusDot, { backgroundColor: isOnline() ? '#4CAF50' : '#F44336' }]} />
               <Text style={[styles.statusText, { color: theme.colors.textSecondary }]}>{isOnline() ? 'ONLINE' : 'OFFLINE'}</Text>
             </View>
@@ -166,6 +169,23 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 24,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 12,
+    elevation: 1,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+  },
+  titleContainer: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+  },
+  titleAccent: {
+    fontSize: 28,
+    fontWeight: 'bold',
+    marginLeft: 4,
   },
   headerRight: {
     flexDirection: 'row',
@@ -180,11 +200,11 @@ const styles = StyleSheet.create({
   statusContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FFF',
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 20,
     elevation: 2,
+    borderWidth: 1,
   },
   statusDot: {
     width: 8,

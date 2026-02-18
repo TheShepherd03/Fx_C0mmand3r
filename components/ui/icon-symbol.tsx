@@ -18,6 +18,9 @@ const MAPPING = {
   'paperplane.fill': 'send',
   'chevron.left.forwardslash.chevron.right': 'code',
   'chevron.right': 'chevron-right',
+  'list.bullet': 'list',
+  'antenna.radiowaves.left.and.right': 'signal-cellular-4-bar',
+  'bolt.fill': 'flash-on',
 } as IconMapping;
 
 /**
