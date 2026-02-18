@@ -14,6 +14,8 @@
       "supportsTablet": true
     },
     "android": {
+      "package": "com.fxcommander.app",
+      "versionCode": 1,
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -45,6 +47,12 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "5b59d77a-c7fd-417b-b414-e6f41d3a60ac"
+      }
     }
   }
 }
