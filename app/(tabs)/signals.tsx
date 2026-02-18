@@ -78,7 +78,7 @@ export default function SignalsScreen() {
     // Show confirmation dialog
     Alert.alert(
       "Execute Signal",
-      `Execute ${signal.symbol} ${signal.type} signal with minimum lot size (0.01) at current market price?`,
+      `Execute ${signal.symbol} ${signal.type} signal with minimum lot size (0.01) using ${signal.type === 'BUY' ? 'BUY_STOP' : 'SELL_STOP'} order?`,
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -89,13 +89,12 @@ export default function SignalsScreen() {
             try {
               const commandRef = ref(database, `commands/${selectedAccount}/latest`);
               const command = {
-                action: 'OPEN_POSITION', // Changed to standard command EA recognizes
+                action: 'OPEN_POSITION',
                 symbol: signal.symbol,
                 type: signal.type === 'BUY' ? 0 : 1, // Convert string to number
+                orderType: signal.type === 'BUY' ? 'BUY_STOP' : 'SELL_STOP', // Use stop orders for immediate execution
                 lots: 0.01, // Minimum lot size as requested
-                // Use current market price instead of signal price to avoid invalid stops
-                useCurrentPrice: true,
-                originalSignalPrice: signal.price,
+                price: signal.price, // Entry price for the stop order
                 sl: signal.sl || 0,
                 tp: signal.tp || 0,
                 signalId: signal.id,

@@ -122,10 +122,12 @@ export default function PositionsScreen() {
     try {
       const scaledLots = selectedPosition.lots * scaleFactor;
       const command = {
-        action: 'OPEN_POSITION', // Changed from SCALE_POSITION to standard command
+        action: 'OPEN_POSITION',
         symbol: selectedPosition.symbol,
         type: selectedPosition.type,
+        orderType: selectedPosition.type === 0 ? 'BUY_LIMIT' : 'SELL_LIMIT', // Use limit orders for immediate execution
         lots: scaledLots,
+        price: selectedPosition.currentPrice || selectedPosition.openPrice, // Use current or open price for limit order
         sl: selectedPosition.sl,
         tp: selectedPosition.tp,
         scaleFactor: scaleFactor,
