@@ -26,6 +26,7 @@ export interface AccountData {
   lastUpdated: number;
   isOnline: boolean;
   positions?: Position[];
+  orders?: Position[]; // Pending orders
 }
 
 export interface HistoryPoint {

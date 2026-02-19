@@ -16,6 +16,7 @@ import { useTheme } from '@/contexts/ThemeContext';
 import { useAccount } from '@/contexts/AccountContext';
 import { database } from '@/firebaseConfig';
 import { ref, set } from 'firebase/database';
+import { IconSymbol } from '@/components/ui/icon-symbol';
 
 interface PositionManagementModalProps {
   visible: boolean;
@@ -195,40 +196,47 @@ export function PositionManagementModal({
             </Text>
           </View>
           <TouchableOpacity
-            style={[styles.closeButton, { backgroundColor: theme.colors.buttonBackground }]}
+            style={[styles.closeButton, { backgroundColor: theme.colors.input }]}
             onPress={onClose}
           >
-            <Text style={[styles.closeButtonText, { color: theme.colors.buttonText }]}>✕</Text>
+            <IconSymbol name="xmark" size={16} color={theme.colors.textSecondary} />
           </TouchableOpacity>
         </View>
 
         {/* Tabs */}
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tabContainer}>
-          {[
-            { key: 'breakeven', label: 'Break-Even', icon: '⚖️' },
-            { key: 'trailing', label: 'Trailing', icon: '📈' },
-            { key: 'partial', label: 'Partial', icon: '✂️' },
-            { key: 'scale', label: 'Scale-In', icon: '📊' },
-            { key: 'time', label: 'Time', icon: '⏰' },
-          ].map((tab) => (
-            <TouchableOpacity
-              key={tab.key}
-              style={[
-                styles.tab,
-                activeTab === tab.key && [styles.activeTab, { backgroundColor: theme.colors.primary }]
-              ]}
-              onPress={() => setActiveTab(tab.key as any)}
-            >
-              <Text style={styles.tabIcon}>{tab.icon}</Text>
-              <Text style={[
-                styles.tabText,
-                { color: activeTab === tab.key ? '#fff' : theme.colors.text }
-              ]}>
-                {tab.label}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
+        <View style={styles.tabWrapper}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabContainer}>
+            {[
+              { key: 'breakeven', label: 'Break-Even', icon: 'scalemass' },
+              { key: 'trailing', label: 'Trailing', icon: 'chart.line.uptrend.xyaxis' },
+              { key: 'partial', label: 'Partial', icon: 'scissors' },
+              { key: 'scale', label: 'Scale-In', icon: 'chart.bar.fill' },
+              { key: 'time', label: 'Time', icon: 'clock' },
+            ].map((tab) => (
+              <TouchableOpacity
+                key={tab.key}
+                style={[
+                  styles.tab,
+                  activeTab === tab.key && [styles.activeTab, { backgroundColor: theme.colors.primary }]
+                ]}
+                onPress={() => setActiveTab(tab.key as any)}
+              >
+                <IconSymbol
+                  name={tab.icon as any}
+                  size={16}
+                  color={activeTab === tab.key ? '#fff' : theme.colors.textSecondary}
+                  style={{ marginRight: 6 }}
+                />
+                <Text style={[
+                  styles.tabText,
+                  { color: activeTab === tab.key ? '#fff' : theme.colors.textSecondary }
+                ]}>
+                  {tab.label}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </View>
 
         {/* Content */}
         <ScrollView style={styles.content}>
@@ -242,7 +250,8 @@ export function PositionManagementModal({
                   <Switch
                     value={breakevenEnabled}
                     onValueChange={setBreakevenEnabled}
-                    trackColor={{ false: theme.colors.border, true: theme.colors.primary }}
+                    trackColor={{ false: theme.colors.input, true: theme.colors.primary }}
+                    thumbColor="#FFF"
                   />
                 </View>
 
@@ -256,7 +265,7 @@ export function PositionManagementModal({
                   </Text>
                   <TextInput
                     style={[styles.input, {
-                      backgroundColor: theme.colors.background,
+                      backgroundColor: theme.colors.input,
                       color: theme.colors.text,
                       borderColor: theme.colors.border
                     }]}
@@ -264,7 +273,7 @@ export function PositionManagementModal({
                     onChangeText={setBreakevenThreshold}
                     placeholder="10"
                     keyboardType="numeric"
-                    placeholderTextColor={theme.colors.textSecondary}
+                    placeholderTextColor={theme.colors.textTertiary}
                   />
                 </View>
 
@@ -293,7 +302,8 @@ export function PositionManagementModal({
                   <Switch
                     value={trailingEnabled}
                     onValueChange={setTrailingEnabled}
-                    trackColor={{ false: theme.colors.border, true: theme.colors.primary }}
+                    trackColor={{ false: theme.colors.input, true: theme.colors.primary }}
+                    thumbColor="#FFF"
                   />
                 </View>
 
@@ -413,7 +423,7 @@ export function PositionManagementModal({
                   </Text>
                   <TextInput
                     style={[styles.input, {
-                      backgroundColor: theme.colors.background,
+                      backgroundColor: theme.colors.input,
                       color: theme.colors.text,
                       borderColor: theme.colors.border
                     }]}
@@ -421,7 +431,7 @@ export function PositionManagementModal({
                     onChangeText={setScaleInMultiplier}
                     placeholder="1.5"
                     keyboardType="numeric"
-                    placeholderTextColor={theme.colors.textSecondary}
+                    placeholderTextColor={theme.colors.textTertiary}
                   />
                 </View>
 
@@ -431,7 +441,7 @@ export function PositionManagementModal({
                   </Text>
                   <TextInput
                     style={[styles.input, {
-                      backgroundColor: theme.colors.background,
+                      backgroundColor: theme.colors.input,
                       color: theme.colors.text,
                       borderColor: theme.colors.border
                     }]}
@@ -439,7 +449,7 @@ export function PositionManagementModal({
                     onChangeText={setScaleInThreshold}
                     placeholder="20"
                     keyboardType="numeric"
-                    placeholderTextColor={theme.colors.textSecondary}
+                    placeholderTextColor={theme.colors.textTertiary}
                   />
                 </View>
 
@@ -477,7 +487,8 @@ export function PositionManagementModal({
                   <Switch
                     value={weekendClose}
                     onValueChange={setWeekendClose}
-                    trackColor={{ false: theme.colors.border, true: theme.colors.primary }}
+                    trackColor={{ false: theme.colors.input, true: theme.colors.primary }}
+                    thumbColor="#FFF"
                   />
                 </View>
 
@@ -487,7 +498,7 @@ export function PositionManagementModal({
                   </Text>
                   <TextInput
                     style={[styles.input, {
-                      backgroundColor: theme.colors.background,
+                      backgroundColor: theme.colors.input,
                       color: theme.colors.text,
                       borderColor: theme.colors.border
                     }]}
@@ -495,7 +506,7 @@ export function PositionManagementModal({
                     onChangeText={setTimeLimit}
                     placeholder="24"
                     keyboardType="numeric"
-                    placeholderTextColor={theme.colors.textSecondary}
+                    placeholderTextColor={theme.colors.textTertiary}
                   />
                 </View>
 
@@ -561,8 +572,10 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: 'bold',
   },
-  tabContainer: {
+  tabWrapper: {
     maxHeight: 60,
+  },
+  tabContainer: {
     paddingHorizontal: 16,
     paddingVertical: 8,
   },
@@ -578,10 +591,6 @@ const styles = StyleSheet.create({
   activeTab: {
     backgroundColor: '#007AFF',
   },
-  tabIcon: {
-    fontSize: 16,
-    marginRight: 6,
-  },
   tabText: {
     fontSize: 14,
     fontWeight: '500',
@@ -595,7 +604,7 @@ const styles = StyleSheet.create({
   },
   card: {
     padding: 20,
-    borderRadius: 12,
+    borderRadius: 16,
     marginBottom: 16,
   },
   cardTitle: {
@@ -652,8 +661,8 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   saveButton: {
-    paddingVertical: 12,
-    borderRadius: 8,
+    paddingVertical: 14,
+    borderRadius: 12,
     alignItems: 'center',
     marginTop: 10,
   },
@@ -664,7 +673,7 @@ const styles = StyleSheet.create({
   },
   actionButton: {
     paddingVertical: 14,
-    borderRadius: 8,
+    borderRadius: 12,
     alignItems: 'center',
     marginTop: 10,
   },

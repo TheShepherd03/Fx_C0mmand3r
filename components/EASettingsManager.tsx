@@ -55,11 +55,7 @@ export function EASettingsManager({ onUpdate }: EASettingsManagerProps) {
   const [hasChanges, setHasChanges] = useState(false);
 
   // Load settings on mount
-  useEffect(() => {
-    loadSettings();
-  }, [selectedAccount]); // loadSettings is stable, no need to include
-
-  const loadSettings = async () => {
+  const loadSettings = React.useCallback(async () => {
     if (!selectedAccount) return;
 
     try {
@@ -73,12 +69,16 @@ export function EASettingsManager({ onUpdate }: EASettingsManagerProps) {
       } else {
         setSettings(defaultSettings);
       }
-    } catch (error) {
+    } catch {
       Alert.alert("Error", "Failed to load EA settings");
     } finally {
       setLoading(false);
     }
-  };
+  }, [selectedAccount]);
+
+  useEffect(() => {
+    loadSettings();
+  }, [loadSettings]);
 
   const saveSettings = async () => {
     if (!selectedAccount) {
@@ -97,7 +97,7 @@ export function EASettingsManager({ onUpdate }: EASettingsManagerProps) {
       setHasChanges(false);
       Alert.alert("Success", "EA settings saved successfully. The EA will load these settings within 10 seconds.");
       onUpdate();
-    } catch (error) {
+    } catch {
       Alert.alert("Error", "Failed to save EA settings");
     } finally {
       setLoading(false);
@@ -171,7 +171,8 @@ export function EASettingsManager({ onUpdate }: EASettingsManagerProps) {
           <Switch
             value={settings.enableBreakeven}
             onValueChange={(value) => updateSetting('enableBreakeven', value)}
-            trackColor={{ false: theme.colors.border, true: theme.colors.primary }}
+            trackColor={{ false: theme.colors.input, true: theme.colors.primary }}
+            thumbColor="#FFF"
           />
         </View>
 
@@ -184,7 +185,7 @@ export function EASettingsManager({ onUpdate }: EASettingsManagerProps) {
               style={[styles.input, {
                 borderColor: theme.colors.border,
                 color: theme.colors.text,
-                backgroundColor: theme.colors.background
+                backgroundColor: theme.colors.input
               }]}
               value={settings.breakevenThresholdPips.toString()}
               onChangeText={(text) => {
@@ -202,7 +203,8 @@ export function EASettingsManager({ onUpdate }: EASettingsManagerProps) {
           <Switch
             value={settings.enableTrailing}
             onValueChange={(value) => updateSetting('enableTrailing', value)}
-            trackColor={{ false: theme.colors.border, true: theme.colors.primary }}
+            trackColor={{ false: theme.colors.input, true: theme.colors.primary }}
+            thumbColor="#FFF"
           />
         </View>
 
@@ -211,7 +213,8 @@ export function EASettingsManager({ onUpdate }: EASettingsManagerProps) {
           <Switch
             value={settings.enableTimeManagement}
             onValueChange={(value) => updateSetting('enableTimeManagement', value)}
-            trackColor={{ false: theme.colors.border, true: theme.colors.primary }}
+            trackColor={{ false: theme.colors.input, true: theme.colors.primary }}
+            thumbColor="#FFF"
           />
         </View>
 
@@ -220,7 +223,8 @@ export function EASettingsManager({ onUpdate }: EASettingsManagerProps) {
           <Switch
             value={settings.weekendClose}
             onValueChange={(value) => updateSetting('weekendClose', value)}
-            trackColor={{ false: theme.colors.border, true: theme.colors.primary }}
+            trackColor={{ false: theme.colors.input, true: theme.colors.primary }}
+            thumbColor="#FFF"
           />
         </View>
 
@@ -232,7 +236,7 @@ export function EASettingsManager({ onUpdate }: EASettingsManagerProps) {
             style={[styles.input, {
               borderColor: theme.colors.border,
               color: theme.colors.text,
-              backgroundColor: theme.colors.background
+              backgroundColor: theme.colors.input
             }]}
             value={settings.dailyTargetPercent.toString()}
             onChangeText={(text) => {
@@ -256,7 +260,8 @@ export function EASettingsManager({ onUpdate }: EASettingsManagerProps) {
           <Switch
             value={settings.enableSchedule}
             onValueChange={(value) => updateSetting('enableSchedule', value)}
-            trackColor={{ false: theme.colors.border, true: theme.colors.primary }}
+            trackColor={{ false: theme.colors.input, true: theme.colors.primary }}
+            thumbColor="#FFF"
           />
         </View>
 
@@ -271,7 +276,7 @@ export function EASettingsManager({ onUpdate }: EASettingsManagerProps) {
                   key={`start-${time.hour}`}
                   style={[
                     styles.timeButton,
-                    { borderColor: theme.colors.border },
+                    { borderColor: theme.colors.border, backgroundColor: theme.colors.input },
                     settings.pauseStartTime === time.label && {
                       backgroundColor: theme.colors.primary,
                       borderColor: theme.colors.primary
@@ -298,7 +303,7 @@ export function EASettingsManager({ onUpdate }: EASettingsManagerProps) {
                   key={`end-${time.hour}`}
                   style={[
                     styles.timeButton,
-                    { borderColor: theme.colors.border },
+                    { borderColor: theme.colors.border, backgroundColor: theme.colors.input },
                     settings.pauseEndTime === time.label && {
                       backgroundColor: theme.colors.primary,
                       borderColor: theme.colors.primary
@@ -325,7 +330,7 @@ export function EASettingsManager({ onUpdate }: EASettingsManagerProps) {
                   key={index}
                   style={[
                     styles.modeButton,
-                    { borderColor: theme.colors.border },
+                    { borderColor: theme.colors.border, backgroundColor: theme.colors.input },
                     settings.pauseMode === index && {
                       backgroundColor: theme.colors.primary,
                       borderColor: theme.colors.primary
@@ -359,7 +364,7 @@ export function EASettingsManager({ onUpdate }: EASettingsManagerProps) {
         <TouchableOpacity
           style={[
             styles.saveButton,
-            { backgroundColor: hasChanges ? theme.colors.primary : theme.colors.border }
+            { backgroundColor: hasChanges ? theme.colors.primary : theme.colors.input }
           ]}
           onPress={saveSettings}
           disabled={!hasChanges || loading}

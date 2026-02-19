@@ -9,6 +9,7 @@ export interface Theme {
     surface: string;
     card: string;
     overlay: string;
+    input: string;
 
     // Text colors
     text: string;
@@ -18,6 +19,7 @@ export interface Theme {
     // Brand colors
     primary: string;
     primaryText: string;
+    accent: string;
 
     // Status colors
     success: string;
@@ -39,74 +41,84 @@ export interface Theme {
     loss: string;
     buy: string;
     sell: string;
+    buyBackground: string;
+    sellBackground: string;
   };
   isDark: boolean;
 }
 
 const lightTheme: Theme = {
   colors: {
-    background: '#F5F5F5',
+    background: '#F8FAFC', // Slate 50
     surface: '#FFFFFF',
     card: '#FFFFFF',
     overlay: 'rgba(0, 0, 0, 0.5)',
+    input: '#F1F5F9',      // Slate 100
 
-    text: '#333333',
-    textSecondary: '#666666',
-    textTertiary: '#999999',
+    text: '#0F172A',       // Slate 900
+    textSecondary: '#64748B', // Slate 500
+    textTertiary: '#94A3B8',  // Slate 400
 
-    primary: '#007AFF',
+    primary: '#3B82F6',    // Blue 500
     primaryText: '#FFFFFF',
+    accent: '#60A5FA',     // Blue 400
 
-    success: '#4CAF50',
-    error: '#F44336',
-    warning: '#FF9800',
-    info: '#2196F3',
+    success: '#10B981',    // Emerald 500
+    error: '#EF4444',      // Red 500
+    warning: '#F59E0B',    // Amber 500
+    info: '#3B82F6',       // Blue 500
 
-    border: '#E0E0E0',
-    divider: '#F0F0F0',
+    border: '#E2E8F0',     // Slate 200
+    divider: '#F1F5F9',    // Slate 100
 
-    buttonBackground: '#007AFF',
+    buttonBackground: '#3B82F6',
     buttonText: '#FFFFFF',
-    buttonSecondary: '#F8F9FA',
+    buttonSecondary: '#F1F5F9',
 
-    profit: '#4CAF50',
-    loss: '#F44336',
-    buy: '#4CAF50',
-    sell: '#F44336',
+    profit: '#10B981',
+    loss: '#EF4444',
+    buy: '#10B981',
+    sell: '#EF4444',
+    buyBackground: '#ECFDF5',
+    sellBackground: '#FEF2F2',
   },
   isDark: false,
 };
 
 const darkTheme: Theme = {
   colors: {
-    background: '#121212',
-    surface: '#1E1E1E',
-    card: '#2D2D2D',
+    background: '#0F172A', // Slate 900
+    surface: '#1E293B',    // Slate 800
+    card: '#1E293B',       // Slate 800
     overlay: 'rgba(0, 0, 0, 0.7)',
+    input: '#334155',      // Slate 700
 
-    text: '#FFFFFF',
-    textSecondary: '#B3B3B3',
-    textTertiary: '#808080',
+    text: '#F8FAFC',       // Slate 50
+    textSecondary: '#94A3B8', // Slate 400
+    textTertiary: '#64748B',  // Slate 500
 
-    primary: '#0A84FF',
+    primary: '#3B82F6',    // Blue 500
     primaryText: '#FFFFFF',
+    accent: '#60A5FA',     // Blue 400
 
-    success: '#30D158',
-    error: '#FF453A',
-    warning: '#FF9F0A',
-    info: '#007AFF',
+    success: '#10B981',    // Emerald 500
+    error: '#EF4444',      // Red 500
+    warning: '#F59E0B',    // Amber 500
+    info: '#3B82F6',       // Blue 500
 
-    border: '#3A3A3A',
-    divider: '#2A2A2A',
+    border: '#334155',     // Slate 700
+    divider: '#334155',    // Slate 700
 
-    buttonBackground: '#0A84FF',
+    buttonBackground: '#3B82F6',
     buttonText: '#FFFFFF',
-    buttonSecondary: '#2A2A2A',
+    buttonSecondary: '#334155',
 
-    profit: '#30D158',
-    loss: '#FF453A',
-    buy: '#30D158',
-    sell: '#FF453A',
+    profit: '#10B981',
+    loss: '#EF4444',
+    buy: '#10B981',
+    sell: '#EF4444',
+    buyBackground: 'rgba(16, 185, 129, 0.15)',
+    sellBackground: 'rgba(239, 68, 68, 0.15)',
   },
   isDark: true,
 };

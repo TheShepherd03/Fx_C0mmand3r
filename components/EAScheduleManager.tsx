@@ -53,7 +53,7 @@ export function EAScheduleManager({ currentSchedule, onUpdate }: EAScheduleManag
 
   const handleScheduleUpdate = async () => {
     const success = await sendCommand('SET_EA_SCHEDULE', schedule);
-    
+
     if (success) {
       Alert.alert("Success", "EA Schedule updated successfully");
       onUpdate();
@@ -75,7 +75,7 @@ export function EAScheduleManager({ currentSchedule, onUpdate }: EAScheduleManag
               pauseMode: 0, // No new trades
               immediate: true
             });
-            
+
             if (success) {
               Alert.alert("Success", `EA paused for ${label}`);
               onUpdate();
@@ -90,7 +90,7 @@ export function EAScheduleManager({ currentSchedule, onUpdate }: EAScheduleManag
     const success = await sendCommand('SET_EA_PAUSE', {
       immediate: false // Resume EA
     });
-    
+
     if (success) {
       Alert.alert("Success", "EA resumed successfully");
       onUpdate();
@@ -133,7 +133,7 @@ export function EAScheduleManager({ currentSchedule, onUpdate }: EAScheduleManag
         <Text style={[styles.cardTitle, { color: theme.colors.text }]}>
           📅 Daily Schedule
         </Text>
-        
+
         <View style={styles.timelineContainer}>
           <Text style={[styles.timelineLabel, { color: theme.colors.textSecondary }]}>
             09:00 ████████████████░░░░ 17:00
@@ -159,7 +159,7 @@ export function EAScheduleManager({ currentSchedule, onUpdate }: EAScheduleManag
         <Text style={[styles.cardTitle, { color: theme.colors.text }]}>
           ⚙️ Schedule Settings
         </Text>
-        
+
         {/* Pause Start Time */}
         <View style={styles.settingSection}>
           <Text style={[styles.settingLabel, { color: theme.colors.text }]}>
@@ -171,10 +171,10 @@ export function EAScheduleManager({ currentSchedule, onUpdate }: EAScheduleManag
                 key={time.hour}
                 style={[
                   styles.timeButton,
-                  { borderColor: theme.colors.border },
-                  schedule.pauseStartTime === time.label && { 
+                  { borderColor: theme.colors.border, backgroundColor: theme.colors.input },
+                  schedule.pauseStartTime === time.label && {
                     backgroundColor: theme.colors.primary,
-                    borderColor: theme.colors.primary 
+                    borderColor: theme.colors.primary
                   }
                 ]}
                 onPress={() => setSchedule({
@@ -204,10 +204,10 @@ export function EAScheduleManager({ currentSchedule, onUpdate }: EAScheduleManag
                 key={time.hour}
                 style={[
                   styles.timeButton,
-                  { borderColor: theme.colors.border },
-                  schedule.pauseEndTime === time.label && { 
+                  { borderColor: theme.colors.border, backgroundColor: theme.colors.input },
+                  schedule.pauseEndTime === time.label && {
                     backgroundColor: theme.colors.primary,
-                    borderColor: theme.colors.primary 
+                    borderColor: theme.colors.primary
                   }
                 ]}
                 onPress={() => setSchedule({
@@ -237,10 +237,10 @@ export function EAScheduleManager({ currentSchedule, onUpdate }: EAScheduleManag
                 key={index}
                 style={[
                   styles.modeButton,
-                  { borderColor: theme.colors.border },
-                  schedule.pauseMode === index && { 
+                  { borderColor: theme.colors.border, backgroundColor: theme.colors.input },
+                  schedule.pauseMode === index && {
                     backgroundColor: theme.colors.primary,
-                    borderColor: theme.colors.primary 
+                    borderColor: theme.colors.primary
                   }
                 ]}
                 onPress={() => setSchedule({
@@ -275,7 +275,7 @@ export function EAScheduleManager({ currentSchedule, onUpdate }: EAScheduleManag
         <Text style={[styles.description, { color: theme.colors.textSecondary }]}>
           Temporarily pause EA operations
         </Text>
-        
+
         <View style={styles.quickPauseButtons}>
           {[
             { duration: 900, label: '15min' },

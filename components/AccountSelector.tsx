@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
 import { Picker } from '@react-native-picker/picker';
 import { useAccount } from '@/contexts/AccountContext';
@@ -22,7 +22,7 @@ export function AccountSelector() {
             try {
               await removeAccount(accountId);
               Alert.alert("Success", "Account removed successfully");
-            } catch (error) {
+            } catch {
               Alert.alert("Error", "Failed to remove account. Please try again.");
             }
           }
@@ -33,15 +33,15 @@ export function AccountSelector() {
 
   if (loading) {
     return (
-      <View style={styles.container}>
-        <Text style={styles.label}>Loading accounts...</Text>
+      <View style={[styles.container, { backgroundColor: theme.colors.card, borderColor: theme.colors.border }]}>
+        <Text style={[styles.label, { color: theme.colors.textSecondary }]}>Loading accounts...</Text>
       </View>
     );
   }
 
   if (availableAccounts.length === 0) {
     return (
-      <View style={[styles.container, { backgroundColor: theme.colors.card }]}>
+      <View style={[styles.container, { backgroundColor: theme.colors.card, borderColor: theme.colors.border }]}>
         <Text style={[styles.label, { color: theme.colors.text }]}>No EA connections found</Text>
         <Text style={[styles.subtitle, { color: theme.colors.textSecondary }]}>Start an EA on MT5 to see accounts here</Text>
       </View>
@@ -49,13 +49,13 @@ export function AccountSelector() {
   }
 
   return (
-    <View style={[styles.container, { backgroundColor: theme.colors.card }]}>
-      <Text style={[styles.label, { color: theme.colors.text }]}>Trading Account:</Text>
+    <View style={[styles.container, { backgroundColor: theme.colors.card, borderColor: theme.colors.border }]}>
       <View style={styles.row}>
-        <View style={styles.pickerContainer}>
+        <View style={[styles.pickerContainer, { backgroundColor: theme.colors.input }]}>
           <Picker
             selectedValue={selectedAccount || undefined}
-            style={styles.picker}
+            style={[styles.picker, { color: theme.colors.text }]}
+            dropdownIconColor={theme.colors.textSecondary}
             onValueChange={(itemValue: string) => setSelectedAccount(itemValue)}
           >
             {availableAccounts.map((account) => (
@@ -63,16 +63,18 @@ export function AccountSelector() {
                 key={account}
                 label={account.replace(/_/g, ' ')}
                 value={account}
+                color={theme.colors.text}
+                style={{ backgroundColor: theme.colors.card }}
               />
             ))}
           </Picker>
         </View>
         {selectedAccount && (
           <TouchableOpacity
-            style={styles.deleteButton}
+            style={[styles.deleteButton, { backgroundColor: theme.colors.input }]}
             onPress={() => handleRemoveAccount(selectedAccount)}
           >
-            <Text style={styles.deleteButtonText}>🗑️</Text>
+            <Text style={[styles.deleteButtonText, { color: theme.colors.error }]}>🗑️</Text>
           </TouchableOpacity>
         )}
       </View>
@@ -82,48 +84,41 @@ export function AccountSelector() {
 
 const styles = StyleSheet.create({
   container: {
-    padding: 16,
-    backgroundColor: '#f8f9fa',
-    borderRadius: 8,
     marginBottom: 16,
+    borderRadius: 12,
   },
   label: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#333',
     marginBottom: 8,
+    textAlign: 'center',
   },
   subtitle: {
     fontSize: 14,
-    color: '#666',
     textAlign: 'center',
     marginTop: 4,
   },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 12,
   },
   pickerContainer: {
     flex: 1,
-    backgroundColor: '#fff',
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: '#ddd',
+    borderRadius: 8,
+    overflow: 'hidden',
   },
   picker: {
     height: 50,
   },
   deleteButton: {
-    backgroundColor: '#ff4757',
-    borderRadius: 6,
-    padding: 12,
+    borderRadius: 8,
+    width: 50,
+    height: 50,
     justifyContent: 'center',
     alignItems: 'center',
-    minWidth: 44,
-    minHeight: 44,
   },
   deleteButtonText: {
-    fontSize: 18,
+    fontSize: 20,
   },
 });

@@ -7,7 +7,8 @@ import {
   SafeAreaView,
   TouchableOpacity,
   ActivityIndicator,
-  Alert
+  Alert,
+  RefreshControl
 } from 'react-native';
 import { Position } from '@/constants/types';
 import { useAccount } from '@/contexts/AccountContext';
@@ -16,6 +17,7 @@ import { PositionManagementModal } from '@/components/PositionManagementModal';
 import { useTheme } from '@/contexts/ThemeContext';
 import { database } from '@/firebaseConfig';
 import { ref, set, onValue, off } from 'firebase/database';
+import { IconSymbol } from '@/components/ui/icon-symbol';
 
 interface AccountData {
   balance?: number;
@@ -36,6 +38,7 @@ export default function PositionsScreen() {
   const [modalVisible, setModalVisible] = useState(false);
   const [managementModalVisible, setManagementModalVisible] = useState(false);
   const [managementPosition, setManagementPosition] = useState<Position | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
 
   // Data fetching logic
   useEffect(() => {
@@ -53,19 +56,30 @@ export default function PositionsScreen() {
     const handleData = (snapshot: any) => {
       const val = snapshot.val();
       if (val) {
-        setData(val);
+        // Handle positions array/object
+        let positions: Position[] = [];
+        if (val.positions) {
+          if (Array.isArray(val.positions)) {
+            positions = val.positions;
+          } else {
+            positions = Object.values(val.positions);
+          }
+        }
+        setData({ ...val, positions });
         setError(null);
       } else {
         setData(null);
         setError('No data available');
       }
       setLoading(false);
+      setRefreshing(false);
     };
 
     const handleError = (error: any) => {
       console.error('Firebase error:', error);
       setError('Connection error');
       setLoading(false);
+      setRefreshing(false);
     };
 
     onValue(accountRef, handleData, handleError);
@@ -74,6 +88,12 @@ export default function PositionsScreen() {
       off(accountRef, 'value', handleData);
     };
   }, [selectedAccount]);
+
+  const onRefresh = () => {
+    setRefreshing(true);
+    // Real-time listener will update automatically, but we simulate a refresh state
+    setTimeout(() => setRefreshing(false), 1000);
+  };
 
   const handleClosePosition = async (ticket: number) => {
     Alert.alert(
@@ -91,7 +111,6 @@ export default function PositionsScreen() {
                 Alert.alert("Error", "No account selected");
                 return;
               }
-              // Set 'latest' command
               const commandRef = ref(database, `commands/${selectedAccount}/latest`);
               await set(commandRef, {
                 action: 'CLOSE_TICKET',
@@ -133,9 +152,6 @@ export default function PositionsScreen() {
         status: 'PENDING',
         timestamp: Math.floor(Date.now() / 1000)
       };
-
-      console.log('Sending scale command:', JSON.stringify(command, null, 2));
-      console.log('Firebase path:', `commands/${selectedAccount}/latest`);
 
       const commandRef = ref(database, `commands/${selectedAccount}/latest`);
       await set(commandRef, command);
@@ -217,8 +233,7 @@ export default function PositionsScreen() {
   };
 
   const handleManagementUpdate = () => {
-    // Refresh position data after management changes
-    // This will be handled by the existing data fetching
+    // Refresh handled by real-time listener
   };
 
   const handleModifySLTP = async (ticket: number, sl: number, tp: number) => {
@@ -238,126 +253,230 @@ export default function PositionsScreen() {
         timestamp: Math.floor(Date.now() / 1000)
       });
       Alert.alert("Success", "SL/TP modification sent to EA");
-    } catch (error) {
+    } catch {
       Alert.alert("Error", "Failed to send SL/TP modification command");
     }
   };
 
+  const formatCurrency = (val: number) => {
+    return `$${val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  };
+
   const renderItem = ({ item }: { item: Position }) => (
-    <TouchableOpacity style={[styles.card, { backgroundColor: theme.colors.card }]} onPress={() => handlePositionTap(item)} activeOpacity={0.8}>
+    <TouchableOpacity
+      style={[styles.positionCard, { backgroundColor: theme.colors.card }]}
+      onPress={() => handlePositionTap(item)}
+      activeOpacity={0.9}
+    >
+      {/* Card Header: Symbol, Type, P/L */}
       <View style={styles.cardHeader}>
-        <View>
-          <Text style={[styles.symbol, { color: theme.colors.text }]}>{item.symbol}</Text>
-          <Text style={[styles.ticket, { color: theme.colors.textSecondary }]}>#{item.ticket}</Text>
+        <View style={styles.symbolContainer}>
+          <View style={[styles.iconPlaceholder, { backgroundColor: theme.colors.input }]}>
+            <Text style={[styles.iconText, { color: theme.colors.textSecondary }]}>
+              {item.symbol.substring(0, 2)}
+            </Text>
+          </View>
+          <View>
+            <View style={styles.symbolRow}>
+              <Text style={[styles.symbolText, { color: theme.colors.text }]}>{item.symbol}</Text>
+              <View style={[
+                styles.typeBadge,
+                { backgroundColor: item.type === 0 ? theme.colors.buyBackground : theme.colors.sellBackground }
+              ]}>
+                <Text style={[
+                  styles.typeText,
+                  { color: item.type === 0 ? theme.colors.buy : theme.colors.sell }
+                ]}>
+                  {item.type === 0 ? 'BUY' : 'SELL'}
+                </Text>
+              </View>
+            </View>
+            <Text style={[styles.lotText, { color: theme.colors.textSecondary }]}>
+              {item.lots} Lots @ {item.openPrice}
+            </Text>
+          </View>
         </View>
-        <View style={styles.headerRight}>
-          <Text style={[styles.type, { color: item.type === 0 ? theme.colors.buy : theme.colors.sell }]}>
-            {item.type === 0 ? 'BUY' : 'SELL'}
+
+        <View style={styles.plContainer}>
+          <Text style={[styles.plText, { color: item.profit >= 0 ? theme.colors.profit : theme.colors.loss }]}>
+            {item.profit >= 0 ? '+' : ''}{formatCurrency(item.profit)}
           </Text>
-          {/* Management Status Indicators */}
-          <View style={styles.statusIndicators}>
+          <View style={styles.badgesRow}>
             {item.breakevenEnabled && (
-              <View style={[styles.statusBadge, { backgroundColor: item.breakevenTriggered ? theme.colors.success : theme.colors.warning }]}>
-                <Text style={styles.statusBadgeText}>BE</Text>
+              <View style={[styles.miniBadge, { backgroundColor: theme.colors.input }]}>
+                <Text style={[styles.miniBadgeText, { color: theme.colors.textSecondary }]}>BE Active</Text>
               </View>
             )}
-            {item.trailingEnabled && (
-              <View style={[styles.statusBadge, { backgroundColor: theme.colors.primary }]}>
-                <Text style={styles.statusBadgeText}>{item.trailingPercentage}%</Text>
+            {item.tp > 0 && (
+              <View style={[styles.miniBadge, { backgroundColor: theme.colors.input }]}>
+                <Text style={[styles.miniBadgeText, { color: theme.colors.info }]}>TP Set</Text>
               </View>
             )}
           </View>
         </View>
       </View>
 
-      <View style={styles.row}>
-        <Text style={[styles.label, { color: theme.colors.textSecondary }]}>Lots: {item.lots}</Text>
-        <Text style={[styles.label, { color: theme.colors.textSecondary }]}>Open: {item.openPrice}</Text>
+      {/* Price Grid */}
+      <View style={[styles.priceGrid, { borderTopColor: theme.colors.border, borderBottomColor: theme.colors.border }]}>
+        <View style={styles.priceItem}>
+          <Text style={[styles.priceLabel, { color: theme.colors.textSecondary }]}>Entry</Text>
+          <Text style={[styles.priceValue, { color: theme.colors.text }]}>{item.openPrice}</Text>
+        </View>
+        <View style={[styles.priceItem, { alignItems: 'flex-end' }]}>
+          <Text style={[styles.priceLabel, { color: theme.colors.textSecondary }]}>Current</Text>
+          <Text style={[styles.priceValue, { color: theme.colors.text }]}>{item.currentPrice}</Text>
+        </View>
       </View>
 
-      <View style={styles.row}>
-        <Text style={[styles.profit, { color: item.profit >= 0 ? theme.colors.profit : theme.colors.loss }]}>
-          {item.profit >= 0 ? '+' : ''}{item.profit.toFixed(2)}
-        </Text>
+      {/* Action Buttons */}
+      <View style={styles.actionRow}>
+        <TouchableOpacity
+          style={[styles.actionBtn, { backgroundColor: theme.colors.info + '20' }]}
+          onPress={(e) => {
+            e.stopPropagation();
+            handlePartialClose(item, 25);
+          }}
+        >
+          <Text style={[styles.actionBtnText, { color: theme.colors.info }]}>[25%]</Text>
+        </TouchableOpacity>
 
-        <View style={styles.actionButtons}>
-          {/* Quick Action Buttons */}
-          <TouchableOpacity
-            style={[styles.quickButton, { backgroundColor: theme.colors.primary }]}
-            onPress={(e) => {
-              e.stopPropagation();
-              handlePartialClose(item, 25);
-            }}
-          >
-            <Text style={styles.quickButtonText}>25%</Text>
-          </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.actionBtn, { backgroundColor: theme.colors.info + '20' }]}
+          onPress={(e) => {
+            e.stopPropagation();
+            handlePartialClose(item, 50);
+          }}
+        >
+          <Text style={[styles.actionBtnText, { color: theme.colors.info }]}>[50%]</Text>
+        </TouchableOpacity>
 
-          <TouchableOpacity
-            style={[styles.quickButton, { backgroundColor: theme.colors.primary }]}
-            onPress={(e) => {
-              e.stopPropagation();
-              handlePartialClose(item, 50);
-            }}
-          >
-            <Text style={styles.quickButtonText}>50%</Text>
-          </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.iconBtn, { backgroundColor: theme.colors.input }]}
+          onPress={(e) => {
+            e.stopPropagation();
+            handleManagePosition(item);
+          }}
+        >
+          <IconSymbol name="gear" size={20} color={theme.colors.textSecondary} />
+        </TouchableOpacity>
 
-          <TouchableOpacity
-            style={[styles.manageButton, { backgroundColor: theme.colors.border }]}
-            onPress={(e) => {
-              e.stopPropagation();
-              handleManagePosition(item);
-            }}
-          >
-            <Text style={styles.manageButtonText}>⚙️</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.closeButton, closingIds.has(item.ticket) && styles.disabledButton]}
-            onPress={(e) => {
-              e.stopPropagation();
-              handleClosePosition(item.ticket);
-            }}
-            disabled={closingIds.has(item.ticket)}
-          >
-            {closingIds.has(item.ticket) ? (
-              <ActivityIndicator color="#FFF" size="small" />
-            ) : (
-              <Text style={styles.closeButtonText}>✕</Text>
-            )}
-          </TouchableOpacity>
-        </View>
+        <TouchableOpacity
+          style={[styles.iconBtn, { backgroundColor: theme.colors.error + '20' }]}
+          onPress={(e) => {
+            e.stopPropagation();
+            handleClosePosition(item.ticket);
+          }}
+          disabled={closingIds.has(item.ticket)}
+        >
+          {closingIds.has(item.ticket) ? (
+            <ActivityIndicator color={theme.colors.error} size="small" />
+          ) : (
+            <IconSymbol name="xmark" size={20} color={theme.colors.error} />
+          )}
+        </TouchableOpacity>
       </View>
     </TouchableOpacity>
   );
 
+  const calculateTotalPL = () => {
+    if (!data?.balance || !data?.equity) return 0;
+    return data.equity - data.balance;
+  };
+
+  const calculatePLPercent = () => {
+    if (!data?.balance || data.balance === 0) return 0;
+    const pl = calculateTotalPL();
+    return (pl / data.balance) * 100;
+  };
+
+  const totalPL = calculateTotalPL();
+  const plPercent = calculatePLPercent();
+
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.background }]}>
-      <View style={[styles.header, { backgroundColor: theme.colors.surface, borderBottomColor: theme.colors.border }]}>
-        <Text style={[styles.title, { color: theme.colors.text }]}>📊 Portfolio</Text>
+      {/* Header */}
+      <View style={styles.header}>
+        <Text style={[styles.headerTitle, { color: theme.colors.text }]}>Portfolio</Text>
         {data?.positions && data.positions.length > 0 && (
-          <TouchableOpacity style={[styles.closeAllButton, { backgroundColor: theme.colors.error }]} onPress={handleCloseAll}>
-            <Text style={styles.closeAllText}>Close All</Text>
+          <TouchableOpacity
+            style={[styles.closeAllBtn, { backgroundColor: theme.colors.error + '20', borderColor: theme.colors.error }]}
+            onPress={handleCloseAll}
+          >
+            <IconSymbol name="exclamationmark.triangle.fill" size={14} color={theme.colors.error} />
+            <Text style={[styles.closeAllText, { color: theme.colors.error }]}>Close All</Text>
           </TouchableOpacity>
         )}
       </View>
 
-      {loading ? (
-        <Text style={[styles.centerText, { color: theme.colors.textSecondary }]}>Loading positions...</Text>
+      {/* Summary Cards */}
+      <View style={styles.summaryContainer}>
+        <View style={[styles.summaryCard, { backgroundColor: theme.colors.card }]}>
+          <Text style={[styles.summaryLabel, { color: theme.colors.textSecondary }]}>TOTAL P/L</Text>
+          <View style={styles.valueRow}>
+            <Text style={[styles.summaryValue, { color: totalPL >= 0 ? theme.colors.profit : theme.colors.loss }]}>
+              {totalPL >= 0 ? '+' : ''}{formatCurrency(totalPL)}
+            </Text>
+            <View style={[styles.percentTag, { backgroundColor: totalPL >= 0 ? theme.colors.buyBackground : theme.colors.sellBackground }]}>
+              <Text style={[styles.percentText, { color: totalPL >= 0 ? theme.colors.profit : theme.colors.loss }]}>
+                {totalPL >= 0 ? '+' : ''}{plPercent.toFixed(1)}%
+              </Text>
+            </View>
+          </View>
+        </View>
+
+        <View style={[styles.summaryCard, { backgroundColor: theme.colors.card }]}>
+          <Text style={[styles.summaryLabel, { color: theme.colors.textSecondary }]}>MARGIN LEVEL</Text>
+          <View style={styles.valueRow}>
+            <Text style={[styles.summaryValue, { color: theme.colors.text }]}>
+              {data?.marginLevel ? Math.round(data.marginLevel).toLocaleString() : '0'}%
+            </Text>
+            <IconSymbol name="info.circle" size={14} color={theme.colors.textSecondary} />
+          </View>
+        </View>
+      </View>
+
+      {/* Active Positions Header */}
+      <View style={styles.sectionHeader}>
+        <Text style={[styles.sectionTitle, { color: theme.colors.textSecondary }]}>
+          ACTIVE POSITIONS ({data?.positions ? data.positions.length : 0})
+        </Text>
+        <View style={styles.filterContainer}>
+          <TouchableOpacity style={[styles.filterBtn, { backgroundColor: theme.colors.input }]}>
+            <Text style={[styles.filterText, { color: theme.colors.primary }]}>Filter</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.filterBtn, { backgroundColor: theme.colors.input }]}>
+            <Text style={[styles.filterText, { color: theme.colors.primary }]}>Sort</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      {loading && !refreshing ? (
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={theme.colors.primary} />
+          <Text style={[styles.loadingText, { color: theme.colors.textSecondary }]}>Syncing positions...</Text>
+        </View>
       ) : error ? (
-        <Text style={[styles.centerText, { color: theme.colors.error }]}>Error loading data</Text>
+        <View style={styles.centerContainer}>
+          <Text style={[styles.errorText, { color: theme.colors.error }]}>{error}</Text>
+        </View>
       ) : !data?.positions || data.positions.length === 0 ? (
-        <Text style={[styles.centerText, { color: theme.colors.textSecondary }]}>No open positions</Text>
+        <View style={styles.centerContainer}>
+          <IconSymbol name="tray" size={48} color={theme.colors.textTertiary} />
+          <Text style={[styles.emptyText, { color: theme.colors.textSecondary }]}>No active positions</Text>
+        </View>
       ) : (
         <FlatList
           data={data.positions}
           renderItem={renderItem}
           keyExtractor={item => item.ticket.toString()}
           contentContainerStyle={styles.listContent}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.colors.primary} />
+          }
         />
       )}
 
-      {/* Position Details Modal */}
+      {/* Modals */}
       <PositionDetailsModal
         position={selectedPosition}
         visible={modalVisible}
@@ -366,7 +485,6 @@ export default function PositionsScreen() {
         onModifySLTP={handleModifySLTP}
       />
 
-      {/* Position Management Modal */}
       <PositionManagementModal
         position={managementPosition}
         visible={managementModalVisible}
@@ -380,149 +498,239 @@ export default function PositionsScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F5F5F5',
   },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    padding: 16,
-    backgroundColor: '#FFF',
-    borderBottomWidth: 1,
-    borderBottomColor: '#EEE',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
   },
-  title: {
-    fontSize: 24,
+  headerTitle: {
+    fontSize: 28,
     fontWeight: 'bold',
-    color: '#333',
   },
-  closeAllButton: {
-    backgroundColor: '#F44336',
+  closeAllBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 8,
+    borderWidth: 1,
+    gap: 6,
   },
   closeAllText: {
-    color: '#FFF',
     fontWeight: 'bold',
     fontSize: 14,
   },
+  summaryContainer: {
+    flexDirection: 'row',
+    paddingHorizontal: 16,
+    gap: 12,
+    marginBottom: 20,
+  },
+  summaryCard: {
+    flex: 1,
+    padding: 16,
+    borderRadius: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  summaryLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    marginBottom: 8,
+    letterSpacing: 0.5,
+  },
+  valueRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    flexWrap: 'wrap',
+    gap: 4,
+  },
+  summaryValue: {
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  percentTag: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  percentText: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    marginBottom: 12,
+  },
+  sectionTitle: {
+    fontSize: 13,
+    fontWeight: '600',
+    letterSpacing: 0.5,
+  },
+  filterContainer: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  filterBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  filterText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
   listContent: {
     padding: 16,
+    paddingTop: 0,
   },
-  card: {
-    backgroundColor: '#FFF',
-    borderRadius: 12,
+  positionCard: {
+    borderRadius: 16,
     padding: 16,
     marginBottom: 12,
-    elevation: 2,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 6,
+    elevation: 2,
   },
   cardHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'flex-start',
     marginBottom: 12,
   },
-  symbol: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#333',
-  },
-  ticket: {
-    fontSize: 12,
-    color: '#999',
-  },
-  type: {
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  row: {
+  symbolContainer: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginTop: 4,
+    gap: 12,
   },
-  label: {
-    fontSize: 14,
-    color: '#666',
-  },
-  profit: {
-    fontSize: 20,
-    fontWeight: 'bold',
-  },
-  closeButton: {
-    backgroundColor: '#FF9800',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
+  iconPlaceholder: {
+    width: 40,
+    height: 40,
     borderRadius: 20,
-    minWidth: 80,
+    justifyContent: 'center',
     alignItems: 'center',
   },
-  disabledButton: {
-    backgroundColor: '#CCC',
+  iconText: {
+    fontWeight: 'bold',
+    fontSize: 14,
   },
-  closeButtonText: {
-    color: '#FFF',
-    fontWeight: '600',
-  },
-  centerText: {
-    textAlign: 'center',
-    marginTop: 40,
-    color: '#999',
-    fontSize: 16,
-  },
-  headerRight: {
-    alignItems: 'flex-end',
-  },
-  statusIndicators: {
+  symbolRow: {
     flexDirection: 'row',
-    gap: 4,
-    marginTop: 4,
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 4,
   },
-  statusBadge: {
+  symbolText: {
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  typeBadge: {
     paddingHorizontal: 6,
     paddingVertical: 2,
-    borderRadius: 10,
-    minWidth: 24,
-    alignItems: 'center',
+    borderRadius: 4,
   },
-  statusBadgeText: {
-    color: '#FFF',
+  typeText: {
     fontSize: 10,
-    fontWeight: 'bold',
+    fontWeight: '800',
   },
-  actionButtons: {
+  lotText: {
+    fontSize: 12,
+  },
+  plContainer: {
+    alignItems: 'flex-end',
+  },
+  plText: {
+    fontSize: 18,
+    fontWeight: '800',
+    marginBottom: 4,
+  },
+  badgesRow: {
+    flexDirection: 'row',
+    gap: 4,
+  },
+  miniBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  miniBadgeText: {
+    fontSize: 10,
+    fontWeight: '600',
+  },
+  priceGrid: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    marginBottom: 12,
+  },
+  priceItem: {
+    flex: 1,
+  },
+  priceLabel: {
+    fontSize: 11,
+    marginBottom: 2,
+  },
+  priceValue: {
+    fontSize: 14,
+    fontWeight: '600',
+    fontFamily: 'monospace', // Ensure numbers align nicely
+  },
+  actionRow: {
     flexDirection: 'row',
     gap: 8,
-    alignItems: 'center',
   },
-  quickButton: {
-    backgroundColor: '#007AFF',
-    paddingHorizontal: 8,
-    paddingVertical: 6,
-    borderRadius: 6,
-    minWidth: 40,
+  actionBtn: {
+    flex: 2,
+    paddingVertical: 8,
+    borderRadius: 8,
     alignItems: 'center',
+    justifyContent: 'center',
   },
-  quickButtonText: {
-    color: '#FFF',
+  actionBtnText: {
     fontSize: 12,
-    fontWeight: 'bold',
+    fontWeight: '700',
   },
-  manageButton: {
-    backgroundColor: '#666',
-    paddingHorizontal: 8,
-    paddingVertical: 6,
-    borderRadius: 6,
-    minWidth: 32,
+  iconBtn: {
+    flex: 1,
+    paddingVertical: 8,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  centerContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
     alignItems: 'center',
   },
-  manageButtonText: {
-    color: '#FFF',
+  loadingText: {
+    marginTop: 12,
     fontSize: 14,
+  },
+  emptyText: {
+    marginTop: 12,
+    fontSize: 16,
+    fontWeight: '500',
+  },
+  errorText: {
+    fontSize: 16,
+    textAlign: 'center',
   },
 });

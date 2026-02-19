@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { ref, onValue } from 'firebase/database';
 import { database } from '../firebaseConfig'; // Adjust path as needed
 import { AccountData } from '../constants/types';
@@ -9,6 +9,11 @@ export function useAccountData() {
   const [data, setData] = useState<AccountData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
+
+  const refresh = useCallback(() => {
+    setRefreshTrigger(prev => prev + 1);
+  }, []);
 
   useEffect(() => {
     if (!selectedAccount) {
@@ -17,6 +22,7 @@ export function useAccountData() {
       return;
     }
 
+    setLoading(true);
     const accountRef = ref(database, `accounts/${selectedAccount}`);
 
     const unsubscribe = onValue(accountRef, (snapshot) => {
@@ -33,7 +39,16 @@ export function useAccountData() {
           }
         }
 
-        setData({ ...val, positions });
+        let orders = [];
+        if (val.orders) {
+          if (Array.isArray(val.orders)) {
+            orders = val.orders;
+          } else {
+            orders = Object.values(val.orders);
+          }
+        }
+
+        setData({ ...val, positions, orders });
       } else {
         setData(null);
       }
@@ -44,7 +59,7 @@ export function useAccountData() {
     });
 
     return () => unsubscribe();
-  }, [selectedAccount]);
+  }, [selectedAccount, refreshTrigger]);
 
-  return { data, loading, error };
+  return { data, loading, error, refresh };
 }

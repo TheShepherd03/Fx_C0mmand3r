@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import { Position } from '@/constants/types';
 import { useTheme } from '@/contexts/ThemeContext';
+import { IconSymbol } from '@/components/ui/icon-symbol';
 
 interface PositionDetailsModalProps {
   position: Position | null;
@@ -159,7 +160,7 @@ export function PositionDetailsModal({ position, visible, onClose, onScalePositi
       }
     };
 
-    const { contractSize, pipValue } = getContractSpecs(position.symbol);
+    const { contractSize } = getContractSpecs(position.symbol);
 
     // Calculate risk amount: price difference * contract size * lot size
     const riskAmount = priceDifference * contractSize * position.lots;
@@ -225,12 +226,12 @@ export function PositionDetailsModal({ position, visible, onClose, onScalePositi
       onRequestClose={onClose}
     >
       <Pressable style={[styles.overlay, { backgroundColor: theme.colors.overlay }]} onPress={onClose}>
-        <Pressable style={[styles.modalContainer, { backgroundColor: theme.colors.surface }]} onPress={(e) => e.stopPropagation()}>
+        <Pressable style={[styles.modalContainer, { backgroundColor: theme.colors.card }]} onPress={(e) => e.stopPropagation()}>
           <ScrollView
             style={styles.modalContent}
             showsVerticalScrollIndicator={true}
             scrollIndicatorInsets={{ left: 0, right: 0, top: 0, bottom: 0 }}
-            indicatorStyle="black"
+            indicatorStyle={theme.isDark ? "white" : "black"}
             persistentScrollbar={true}
             scrollEventThrottle={16}
             bounces={true}
@@ -241,8 +242,8 @@ export function PositionDetailsModal({ position, visible, onClose, onScalePositi
                 <Text style={[styles.symbol, { color: theme.colors.text }]}>{position.symbol}</Text>
                 <Text style={[styles.ticket, { color: theme.colors.textSecondary }]}>Ticket #{position.ticket}</Text>
               </View>
-              <TouchableOpacity style={[styles.closeButton, { backgroundColor: theme.colors.buttonSecondary }]} onPress={onClose}>
-                <Text style={[styles.closeButtonText, { color: theme.colors.textSecondary }]}>✕</Text>
+              <TouchableOpacity style={[styles.closeButton, { backgroundColor: theme.colors.input }]} onPress={onClose}>
+                <IconSymbol name="xmark" size={16} color={theme.colors.textSecondary} />
               </TouchableOpacity>
             </View>
 
@@ -250,9 +251,9 @@ export function PositionDetailsModal({ position, visible, onClose, onScalePositi
             <View style={styles.statusSection}>
               <View style={[
                 styles.typeTag,
-                { backgroundColor: position.type === 0 ? theme.colors.buy : theme.colors.sell }
+                { backgroundColor: position.type === 0 ? theme.colors.buyBackground : theme.colors.sellBackground }
               ]}>
-                <Text style={styles.typeText}>
+                <Text style={[styles.typeText, { color: position.type === 0 ? theme.colors.buy : theme.colors.sell }]}>
                   {position.type === 0 ? 'BUY' : 'SELL'} {position.lots} LOT
                 </Text>
               </View>
@@ -263,7 +264,7 @@ export function PositionDetailsModal({ position, visible, onClose, onScalePositi
             </View>
 
             {/* Position Configuration */}
-            <View style={[styles.section, { borderTopColor: theme.colors.divider }]}>
+            <View style={[styles.section, { borderTopColor: theme.colors.border }]}>
               <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>Position Configuration</Text>
 
               <View style={styles.priceRow}>
@@ -281,13 +282,13 @@ export function PositionDetailsModal({ position, visible, onClose, onScalePositi
                       {
                         borderColor: theme.colors.border,
                         color: theme.colors.text,
-                        backgroundColor: theme.colors.background
+                        backgroundColor: theme.colors.input
                       }
                     ]}
                     value={editableSL}
                     onChangeText={handleSLChange}
                     placeholder="0.00000"
-                    placeholderTextColor={theme.colors.textSecondary}
+                    placeholderTextColor={theme.colors.textTertiary}
                     keyboardType="numeric"
                   />
                   <View style={styles.monetaryValue}>
@@ -311,13 +312,13 @@ export function PositionDetailsModal({ position, visible, onClose, onScalePositi
                       {
                         borderColor: theme.colors.border,
                         color: theme.colors.text,
-                        backgroundColor: theme.colors.background
+                        backgroundColor: theme.colors.input
                       }
                     ]}
                     value={editableTP}
                     onChangeText={handleTPChange}
                     placeholder="0.00000"
-                    placeholderTextColor={theme.colors.textSecondary}
+                    placeholderTextColor={theme.colors.textTertiary}
                     keyboardType="numeric"
                   />
                   <View style={styles.monetaryValue}>
@@ -337,13 +338,13 @@ export function PositionDetailsModal({ position, visible, onClose, onScalePositi
                   style={[styles.saveButton, { backgroundColor: theme.colors.primary }]}
                   onPress={handleSaveChanges}
                 >
-                  <Text style={styles.saveButtonText}>💾 Save Changes</Text>
+                  <Text style={[styles.saveButtonText, { color: theme.colors.primaryText }]}>💾 Save Changes</Text>
                 </TouchableOpacity>
               )}
             </View>
 
             {/* P&L Information */}
-            <View style={[styles.section, { borderTopColor: theme.colors.divider }]}>
+            <View style={[styles.section, { borderTopColor: theme.colors.border }]}>
               <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>Profit & Loss</Text>
 
               <View style={styles.plRow}>
@@ -382,7 +383,7 @@ export function PositionDetailsModal({ position, visible, onClose, onScalePositi
 
             {/* Position Scaling */}
             {onScalePosition && (
-              <View style={[styles.section, { borderTopColor: theme.colors.divider }]}>
+              <View style={[styles.section, { borderTopColor: theme.colors.border }]}>
                 <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>Position Scaling</Text>
                 <Text style={[styles.scalingDesc, { color: theme.colors.textSecondary }]}>
                   Open additional positions with scaled lot sizes at current market price
@@ -394,7 +395,7 @@ export function PositionDetailsModal({ position, visible, onClose, onScalePositi
                     return (
                       <TouchableOpacity
                         key={factor}
-                        style={[styles.scaleButton, { backgroundColor: theme.colors.buttonBackground }]}
+                        style={[styles.scaleButton, { backgroundColor: theme.colors.input, borderColor: theme.colors.border }]}
                         onPress={() => {
                           Alert.alert(
                             "Scale Position",
@@ -406,10 +407,10 @@ export function PositionDetailsModal({ position, visible, onClose, onScalePositi
                           );
                         }}
                       >
-                        <Text style={styles.scaleButtonText}>
+                        <Text style={[styles.scaleButtonText, { color: theme.colors.primary }]}>
                           {factor}x
                         </Text>
-                        <Text style={styles.scaleButtonLots}>
+                        <Text style={[styles.scaleButtonLots, { color: theme.colors.textSecondary }]}>
                           {scaledLots} lots
                         </Text>
                       </TouchableOpacity>
@@ -420,7 +421,7 @@ export function PositionDetailsModal({ position, visible, onClose, onScalePositi
             )}
 
             {/* Technical Details */}
-            <View style={[styles.section, { borderTopColor: theme.colors.divider }]}>
+            <View style={[styles.section, { borderTopColor: theme.colors.border }]}>
               <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>Technical Details</Text>
 
               <View style={styles.detailRow}>
