@@ -476,7 +476,19 @@ export function PositionManagementModal({
 
                 <TouchableOpacity
                   style={[styles.saveButton, { backgroundColor: theme.colors.primary }]}
-                  onPress={() => Alert.alert("Info", "Time management settings saved")}
+                  onPress={async () => {
+                    if (!position) return;
+
+                    const success = await sendCommand('SET_POSITION_TIME_LIMIT', {
+                      ticket: position.ticket,
+                      timeLimit: parseInt(timeLimit) * 3600 // Convert hours to seconds
+                    });
+
+                    if (success) {
+                      Alert.alert("Success", `Time limit set to ${timeLimit} hours for position ${position.ticket}`);
+                      onUpdate();
+                    }
+                  }}
                 >
                   <Text style={styles.saveButtonText}>Save Time Settings</Text>
                 </TouchableOpacity>
