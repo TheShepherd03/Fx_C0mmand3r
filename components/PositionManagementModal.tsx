@@ -9,6 +9,7 @@ import {
   ScrollView,
   StyleSheet,
   Alert,
+  ActivityIndicator,
 } from 'react-native';
 import { Position } from '@/constants/types';
 import { useTheme } from '@/contexts/ThemeContext';
@@ -32,6 +33,7 @@ export function PositionManagementModal({
   const { theme } = useTheme();
   const { selectedAccount } = useAccount();
   const [activeTab, setActiveTab] = useState<'breakeven' | 'trailing' | 'partial' | 'scale' | 'time'>('breakeven');
+  const [isProcessing, setIsProcessing] = useState(false);
 
   // Break-even settings
   const [breakevenEnabled, setBreakevenEnabled] = useState(false);
@@ -66,6 +68,7 @@ export function PositionManagementModal({
       return;
     }
 
+    setIsProcessing(true);
     try {
       const commandRef = ref(database, `commands/${selectedAccount}/latest`);
       await set(commandRef, {
@@ -78,6 +81,8 @@ export function PositionManagementModal({
     } catch {
       Alert.alert("Error", "Failed to send command");
       return false;
+    } finally {
+      setIsProcessing(false);
     }
   };
 
@@ -264,10 +269,15 @@ export function PositionManagementModal({
                 </View>
 
                 <TouchableOpacity
-                  style={[styles.saveButton, { backgroundColor: theme.colors.primary }]}
+                  style={[styles.saveButton, { backgroundColor: theme.colors.primary, opacity: isProcessing ? 0.7 : 1 }]}
                   onPress={handleBreakevenSave}
+                  disabled={isProcessing}
                 >
-                  <Text style={styles.saveButtonText}>Save Break-Even Settings</Text>
+                  {isProcessing ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <Text style={styles.saveButtonText}>Save Break-Even Settings</Text>
+                  )}
                 </TouchableOpacity>
               </View>
             </View>
@@ -319,10 +329,15 @@ export function PositionManagementModal({
                 </View>
 
                 <TouchableOpacity
-                  style={[styles.saveButton, { backgroundColor: theme.colors.primary }]}
+                  style={[styles.saveButton, { backgroundColor: theme.colors.primary, opacity: isProcessing ? 0.7 : 1 }]}
                   onPress={handleTrailingSave}
+                  disabled={isProcessing}
                 >
-                  <Text style={styles.saveButtonText}>Save Trailing Settings</Text>
+                  {isProcessing ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <Text style={styles.saveButtonText}>Save Trailing Settings</Text>
+                  )}
                 </TouchableOpacity>
               </View>
             </View>
@@ -366,12 +381,17 @@ export function PositionManagementModal({
                 </View>
 
                 <TouchableOpacity
-                  style={[styles.actionButton, { backgroundColor: theme.colors.error }]}
+                  style={[styles.actionButton, { backgroundColor: theme.colors.error, opacity: isProcessing ? 0.7 : 1 }]}
                   onPress={handlePartialClose}
+                  disabled={isProcessing}
                 >
-                  <Text style={styles.actionButtonText}>
-                    Close {partialPercentage}% of Position
-                  </Text>
+                  {isProcessing ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <Text style={styles.actionButtonText}>
+                      Close {partialPercentage}% of Position
+                    </Text>
+                  )}
                 </TouchableOpacity>
               </View>
             </View>
@@ -424,12 +444,17 @@ export function PositionManagementModal({
                 </View>
 
                 <TouchableOpacity
-                  style={[styles.actionButton, { backgroundColor: theme.colors.success }]}
+                  style={[styles.actionButton, { backgroundColor: theme.colors.success, opacity: isProcessing ? 0.7 : 1 }]}
                   onPress={handleScaleIn}
+                  disabled={isProcessing}
                 >
-                  <Text style={styles.actionButtonText}>
-                    Scale In {scaleInMultiplier}x
-                  </Text>
+                  {isProcessing ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <Text style={styles.actionButtonText}>
+                      Scale In {scaleInMultiplier}x
+                    </Text>
+                  )}
                 </TouchableOpacity>
               </View>
             </View>
@@ -475,7 +500,8 @@ export function PositionManagementModal({
                 </View>
 
                 <TouchableOpacity
-                  style={[styles.saveButton, { backgroundColor: theme.colors.primary }]}
+                  style={[styles.saveButton, { backgroundColor: theme.colors.primary, opacity: isProcessing ? 0.7 : 1 }]}
+                  disabled={isProcessing}
                   onPress={async () => {
                     if (!position) return;
 
@@ -490,7 +516,11 @@ export function PositionManagementModal({
                     }
                   }}
                 >
-                  <Text style={styles.saveButtonText}>Save Time Settings</Text>
+                  {isProcessing ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <Text style={styles.saveButtonText}>Save Time Settings</Text>
+                  )}
                 </TouchableOpacity>
               </View>
             </View>

@@ -34,11 +34,18 @@ export default function SignalsScreen() {
         const list = Object.keys(val).map(key => ({
           id: key,
           ...val[key]
-        })).sort((a: Signal, b: Signal) => b.timestamp - a.timestamp); // Newest first
+        }))
+          .filter((item: any) => {
+            // Validate required fields to prevent crashes
+            return item.symbol &&
+              (item.action === 'BUY' || item.action === 'SELL') &&
+              typeof item.price === 'number' && !isNaN(item.price) &&
+              typeof item.lots === 'number' && !isNaN(item.lots) &&
+              typeof item.timestamp === 'number' && !isNaN(item.timestamp);
+          })
+          .sort((a: Signal, b: Signal) => b.timestamp - a.timestamp); // Newest first
 
         setSignals(list);
-
-        // External signals are ready for display
       } else {
         setSignals([]);
       }
@@ -56,9 +63,19 @@ export default function SignalsScreen() {
       return;
     }
 
+    if (!signal || !signal.id) {
+      Alert.alert("Error", "Invalid signal data.");
+      return;
+    }
+
     // Calculate risk/reward info
-    const riskAmount = signal.sl > 0 ? Math.abs(signal.price - signal.sl) * signal.lots * 100000 : 0;
-    const rewardAmount = signal.tp > 0 ? Math.abs(signal.tp - signal.price) * signal.lots * 100000 : 0;
+    const price = signal.price || 0;
+    const sl = signal.sl || 0;
+    const tp = signal.tp || 0;
+    const lots = signal.lots || 0;
+
+    const riskAmount = sl > 0 ? Math.abs(price - sl) * lots * 100000 : 0;
+    const rewardAmount = tp > 0 ? Math.abs(tp - price) * lots * 100000 : 0;
     const rrRatio = riskAmount > 0 ? (rewardAmount / riskAmount).toFixed(2) : "N/A";
 
     // Show detailed confirmation dialog
@@ -67,13 +84,13 @@ export default function SignalsScreen() {
       `Execute ${signal.symbol} ${signal.action} signal?
       
 📊 Signal Details:
-• Source: ${signal.source}
-• Entry: ${signal.price.toFixed(5)}
-• Stop Loss: ${signal.sl > 0 ? signal.sl.toFixed(5) : 'None'}
-• Take Profit: ${signal.tp > 0 ? signal.tp.toFixed(5) : 'None'}
-• Lot Size: ${signal.lots}
+• Source: ${signal.source || 'Unknown'}
+• Entry: ${price.toFixed(5)}
+• Stop Loss: ${sl > 0 ? sl.toFixed(5) : 'None'}
+• Take Profit: ${tp > 0 ? tp.toFixed(5) : 'None'}
+• Lot Size: ${lots}
 • Risk/Reward: 1:${rrRatio}
-• Confidence: ${signal.confidence}%`,
+• Confidence: ${signal.confidence || 0}%`,
       [
         { text: "❌ Cancel", style: "cancel" },
         {
@@ -87,9 +104,9 @@ export default function SignalsScreen() {
                 action: 'OPEN_POSITION',
                 symbol: signal.symbol,
                 type: signal.action === 'BUY' ? 0 : 1,
-                lots: signal.lots,
-                sl: signal.sl || 0,
-                tp: signal.tp || 0,
+                lots: lots,
+                sl: sl,
+                tp: tp,
                 status: 'PENDING',
                 timestamp: Math.floor(Date.now() / 1000)
               };
@@ -117,21 +134,38 @@ export default function SignalsScreen() {
   };
 
   const rejectSignal = async (signal: Signal) => {
+    if (!signal || !signal.id) return;
+
+    setExecutingIds(prev => new Set([...prev, signal.id]));
+
     try {
       const signalRef = ref(database, `signals/${selectedAccount}/${signal.id}`);
       await update(signalRef, { status: 'rejected' });
       Alert.alert("Signal Rejected", `${signal.symbol} ${signal.action} signal marked as rejected`);
     } catch {
       Alert.alert("Error", "Failed to reject signal");
+    } finally {
+      setExecutingIds(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(signal.id);
+        return newSet;
+      });
     }
   };
 
   const formatTime = (timestamp: number) => {
-    const date = new Date(timestamp * 1000);
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    if (!timestamp || isNaN(timestamp)) return "Unknown Time";
+    try {
+      const date = new Date(timestamp * 1000);
+      return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    } catch (e) {
+      return "Invalid Time";
+    }
   };
 
   const renderItem = ({ item }: { item: Signal }) => {
+    if (!item) return null;
+
     const getStatusColor = () => {
       switch (item.status) {
         case 'executed': return theme.colors.profit;
@@ -150,19 +184,27 @@ export default function SignalsScreen() {
       }
     };
 
+    const price = item.price || 0;
+    const sl = item.sl || 0;
+    const tp = item.tp || 0;
+    const confidence = item.confidence || 0;
+    const lots = item.lots || 0;
+    const source = item.source || 'Unknown';
+    const isProcessing = executingIds.has(item.id);
+
     return (
       <View style={[styles.card, { backgroundColor: theme.colors.card }]}>
         <View style={styles.cardHeader}>
           <View>
-            <Text style={[styles.symbol, { color: theme.colors.text }]}>{item.symbol}</Text>
-            <Text style={[styles.source, { color: theme.colors.textSecondary }]}>📡 {item.source}</Text>
+            <Text style={[styles.symbol, { color: theme.colors.text }]}>{item.symbol || 'Unknown'}</Text>
+            <Text style={[styles.source, { color: theme.colors.textSecondary }]}>📡 {source}</Text>
           </View>
           <View style={styles.headerRight}>
             <Text style={[styles.type, { color: item.action === 'BUY' ? theme.colors.buy : theme.colors.sell }]}>
-              {item.action}
+              {item.action || 'Unknown'}
             </Text>
             <View style={[styles.statusBadge, { backgroundColor: getStatusColor() }]}>
-              <Text style={styles.statusText}>{getStatusIcon()} {item.status.toUpperCase()}</Text>
+              <Text style={styles.statusText}>{getStatusIcon()} {(item.status || 'unknown').toUpperCase()}</Text>
             </View>
           </View>
         </View>
@@ -170,10 +212,10 @@ export default function SignalsScreen() {
         <View style={styles.signalInfo}>
           <View style={styles.confidenceContainer}>
             <Text style={[styles.confidence, { color: theme.colors.text }]}>
-              🎯 {item.confidence}% Confidence
+              🎯 {confidence}% Confidence
             </Text>
             <Text style={[styles.lots, { color: theme.colors.textSecondary }]}>
-              Size: {item.lots} lots
+              Size: {lots} lots
             </Text>
           </View>
           <Text style={[styles.time, { color: theme.colors.textTertiary }]}>{formatTime(item.timestamp)}</Text>
@@ -182,18 +224,18 @@ export default function SignalsScreen() {
         <View style={styles.priceInfo}>
           <View>
             <Text style={[styles.label, { color: theme.colors.textSecondary }]}>Entry</Text>
-            <Text style={[styles.value, { color: theme.colors.text }]}>{item.price.toFixed(5)}</Text>
+            <Text style={[styles.value, { color: theme.colors.text }]}>{price.toFixed(5)}</Text>
           </View>
           <View>
             <Text style={[styles.label, { color: theme.colors.textSecondary }]}>Stop Loss</Text>
             <Text style={[styles.value, { color: theme.colors.loss }]}>
-              {item.sl > 0 ? item.sl.toFixed(5) : 'None'}
+              {sl > 0 ? sl.toFixed(5) : 'None'}
             </Text>
           </View>
           <View>
             <Text style={[styles.label, { color: theme.colors.textSecondary }]}>Take Profit</Text>
             <Text style={[styles.value, { color: theme.colors.profit }]}>
-              {item.tp > 0 ? item.tp.toFixed(5) : 'None'}
+              {tp > 0 ? tp.toFixed(5) : 'None'}
             </Text>
           </View>
         </View>
@@ -203,16 +245,21 @@ export default function SignalsScreen() {
             <TouchableOpacity
               style={[styles.rejectButton, { backgroundColor: theme.colors.error }]}
               onPress={() => rejectSignal(item)}
+              disabled={isProcessing}
             >
-              <Text style={styles.rejectButtonText}>❌ Reject</Text>
+              {isProcessing ? (
+                <ActivityIndicator color="#fff" size="small" />
+              ) : (
+                <Text style={styles.rejectButtonText}>❌ Reject</Text>
+              )}
             </TouchableOpacity>
 
             <TouchableOpacity
               style={[styles.executeButton, { backgroundColor: theme.colors.primary }]}
               onPress={() => executeSignal(item)}
-              disabled={executingIds.has(item.id)}
+              disabled={isProcessing}
             >
-              {executingIds.has(item.id) ? (
+              {isProcessing ? (
                 <ActivityIndicator color="#fff" size="small" />
               ) : (
                 <Text style={styles.executeButtonText}>
