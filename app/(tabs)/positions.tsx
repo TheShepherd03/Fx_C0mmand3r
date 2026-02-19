@@ -12,6 +12,7 @@ import {
 import { Position } from '@/constants/types';
 import { useAccount } from '@/contexts/AccountContext';
 import { PositionDetailsModal } from '@/components/PositionDetailsModal';
+import { PositionManagementModal } from '@/components/PositionManagementModal';
 import { useTheme } from '@/contexts/ThemeContext';
 import { database } from '@/firebaseConfig';
 import { ref, set, onValue, off } from 'firebase/database';
@@ -33,6 +34,8 @@ export default function PositionsScreen() {
   const [closingIds, setClosingIds] = useState<Set<number>>(new Set());
   const [selectedPosition, setSelectedPosition] = useState<Position | null>(null);
   const [modalVisible, setModalVisible] = useState(false);
+  const [managementModalVisible, setManagementModalVisible] = useState(false);
+  const [managementPosition, setManagementPosition] = useState<Position | null>(null);
 
   // Data fetching logic
   useEffect(() => {
@@ -174,6 +177,72 @@ export default function PositionsScreen() {
     );
   };
 
+  const handlePartialClose = async (position: Position, percentage: number) => {
+    if (!selectedAccount) {
+      Alert.alert("Error", "No account selected");
+      return;
+    }
+
+    Alert.alert(
+      "Confirm Partial Close",
+      `Close ${percentage}% of ${position.symbol} position?`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Close",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              const commandRef = ref(database, `commands/${selectedAccount}/latest`);
+              await set(commandRef, {
+                action: "PARTIAL_CLOSE",
+                ticket: position.ticket,
+                percentage: percentage,
+                status: 'PENDING',
+                timestamp: Math.floor(Date.now() / 1000)
+              });
+              Alert.alert("Success", `Partial close order sent for ${percentage}%`);
+            } catch {
+              Alert.alert("Error", "Failed to send partial close command");
+            }
+          }
+        }
+      ]
+    );
+  };
+
+  const handleManagePosition = (position: Position) => {
+    setManagementPosition(position);
+    setManagementModalVisible(true);
+  };
+
+  const handleManagementUpdate = () => {
+    // Refresh position data after management changes
+    // This will be handled by the existing data fetching
+  };
+
+  const handleModifySLTP = async (ticket: number, sl: number, tp: number) => {
+    if (!selectedAccount) {
+      Alert.alert("Error", "No account selected");
+      return;
+    }
+
+    try {
+      const commandRef = ref(database, `commands/${selectedAccount}/latest`);
+      await set(commandRef, {
+        action: "MODIFY_SLTP",
+        ticket: ticket,
+        sl: sl,
+        tp: tp,
+        status: 'PENDING',
+        timestamp: Math.floor(Date.now() / 1000)
+      });
+      Alert.alert("Success", "SL/TP modification sent to EA");
+    } catch (error) {
+      Alert.alert("Error", "Failed to send SL/TP modification command");
+    }
+  };
+
   const renderItem = ({ item }: { item: Position }) => (
     <TouchableOpacity style={[styles.card, { backgroundColor: theme.colors.card }]} onPress={() => handlePositionTap(item)} activeOpacity={0.8}>
       <View style={styles.cardHeader}>
@@ -181,9 +250,24 @@ export default function PositionsScreen() {
           <Text style={[styles.symbol, { color: theme.colors.text }]}>{item.symbol}</Text>
           <Text style={[styles.ticket, { color: theme.colors.textSecondary }]}>#{item.ticket}</Text>
         </View>
-        <Text style={[styles.type, { color: item.type === 0 ? theme.colors.buy : theme.colors.sell }]}>
-          {item.type === 0 ? 'BUY' : 'SELL'}
-        </Text>
+        <View style={styles.headerRight}>
+          <Text style={[styles.type, { color: item.type === 0 ? theme.colors.buy : theme.colors.sell }]}>
+            {item.type === 0 ? 'BUY' : 'SELL'}
+          </Text>
+          {/* Management Status Indicators */}
+          <View style={styles.statusIndicators}>
+            {item.breakevenEnabled && (
+              <View style={[styles.statusBadge, { backgroundColor: item.breakevenTriggered ? theme.colors.success : theme.colors.warning }]}>
+                <Text style={styles.statusBadgeText}>BE</Text>
+              </View>
+            )}
+            {item.trailingEnabled && (
+              <View style={[styles.statusBadge, { backgroundColor: theme.colors.primary }]}>
+                <Text style={styles.statusBadgeText}>{item.trailingPercentage}%</Text>
+              </View>
+            )}
+          </View>
+        </View>
       </View>
 
       <View style={styles.row}>
@@ -196,20 +280,53 @@ export default function PositionsScreen() {
           {item.profit >= 0 ? '+' : ''}{item.profit.toFixed(2)}
         </Text>
 
-        <TouchableOpacity
-          style={[styles.closeButton, closingIds.has(item.ticket) && styles.disabledButton]}
-          onPress={(e) => {
-            e.stopPropagation();
-            handleClosePosition(item.ticket);
-          }}
-          disabled={closingIds.has(item.ticket)}
-        >
-          {closingIds.has(item.ticket) ? (
-            <ActivityIndicator color="#FFF" size="small" />
-          ) : (
-            <Text style={styles.closeButtonText}>Close</Text>
-          )}
-        </TouchableOpacity>
+        <View style={styles.actionButtons}>
+          {/* Quick Action Buttons */}
+          <TouchableOpacity
+            style={[styles.quickButton, { backgroundColor: theme.colors.primary }]}
+            onPress={(e) => {
+              e.stopPropagation();
+              handlePartialClose(item, 25);
+            }}
+          >
+            <Text style={styles.quickButtonText}>25%</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.quickButton, { backgroundColor: theme.colors.primary }]}
+            onPress={(e) => {
+              e.stopPropagation();
+              handlePartialClose(item, 50);
+            }}
+          >
+            <Text style={styles.quickButtonText}>50%</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.manageButton, { backgroundColor: theme.colors.border }]}
+            onPress={(e) => {
+              e.stopPropagation();
+              handleManagePosition(item);
+            }}
+          >
+            <Text style={styles.manageButtonText}>⚙️</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.closeButton, closingIds.has(item.ticket) && styles.disabledButton]}
+            onPress={(e) => {
+              e.stopPropagation();
+              handleClosePosition(item.ticket);
+            }}
+            disabled={closingIds.has(item.ticket)}
+          >
+            {closingIds.has(item.ticket) ? (
+              <ActivityIndicator color="#FFF" size="small" />
+            ) : (
+              <Text style={styles.closeButtonText}>✕</Text>
+            )}
+          </TouchableOpacity>
+        </View>
       </View>
     </TouchableOpacity>
   );
@@ -246,6 +363,15 @@ export default function PositionsScreen() {
         visible={modalVisible}
         onClose={() => setModalVisible(false)}
         onScalePosition={handleScalePosition}
+        onModifySLTP={handleModifySLTP}
+      />
+
+      {/* Position Management Modal */}
+      <PositionManagementModal
+        position={managementPosition}
+        visible={managementModalVisible}
+        onClose={() => setManagementModalVisible(false)}
+        onUpdate={handleManagementUpdate}
       />
     </SafeAreaView>
   );
@@ -348,5 +474,55 @@ const styles = StyleSheet.create({
     marginTop: 40,
     color: '#999',
     fontSize: 16,
+  },
+  headerRight: {
+    alignItems: 'flex-end',
+  },
+  statusIndicators: {
+    flexDirection: 'row',
+    gap: 4,
+    marginTop: 4,
+  },
+  statusBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 10,
+    minWidth: 24,
+    alignItems: 'center',
+  },
+  statusBadgeText: {
+    color: '#FFF',
+    fontSize: 10,
+    fontWeight: 'bold',
+  },
+  actionButtons: {
+    flexDirection: 'row',
+    gap: 8,
+    alignItems: 'center',
+  },
+  quickButton: {
+    backgroundColor: '#007AFF',
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    borderRadius: 6,
+    minWidth: 40,
+    alignItems: 'center',
+  },
+  quickButtonText: {
+    color: '#FFF',
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+  manageButton: {
+    backgroundColor: '#666',
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    borderRadius: 6,
+    minWidth: 32,
+    alignItems: 'center',
+  },
+  manageButtonText: {
+    color: '#FFF',
+    fontSize: 14,
   },
 });

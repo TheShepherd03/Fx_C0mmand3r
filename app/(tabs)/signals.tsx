@@ -1,22 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { StyleSheet, View, Text, FlatList, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
+import { StyleSheet, View, Text, FlatList, TouchableOpacity, Alert, ActivityIndicator, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { database } from '@/firebaseConfig';
-import { ref, query, orderByChild, limitToLast, onValue, set } from 'firebase/database';
+import { ref, query, orderByChild, limitToLast, onValue, set, update } from 'firebase/database';
 import { AccountSelector } from '@/components/AccountSelector';
 import { useAccount } from '@/contexts/AccountContext';
 import { useTheme } from '@/contexts/ThemeContext';
-
-interface Signal {
-  id: string;
-  symbol: string;
-  type: string; // 'BUY' | 'SELL'
-  price: number;
-  sl?: number;
-  tp?: number;
-  timestamp: number;
-  strategy: string;
-}
+import { Signal } from '@/constants/types';
 
 export default function SignalsScreen() {
   const { selectedAccount } = useAccount();
@@ -48,11 +38,7 @@ export default function SignalsScreen() {
 
         setSignals(list);
 
-        // Check for new signals to notify
-        const newest = list[0];
-        if (newest) {
-          scheduleNotification(newest);
-        }
+        // External signals are ready for display
       } else {
         setSignals([]);
       }
@@ -64,25 +50,34 @@ export default function SignalsScreen() {
     return () => unsubscribe();
   }, [selectedAccount]);
 
-  async function scheduleNotification(signal: Signal) {
-    // Notifications disabled for Expo Go compatibility
-    console.log(`Signal: ${signal.type} ${signal.symbol} @ ${signal.price} | ${signal.strategy}`);
-  }
-
   const executeSignal = async (signal: Signal) => {
     if (!selectedAccount) {
       Alert.alert("Error", "No account selected. Please select an account first.");
       return;
     }
 
-    // Show confirmation dialog
+    // Calculate risk/reward info
+    const riskAmount = signal.sl > 0 ? Math.abs(signal.price - signal.sl) * signal.lots * 100000 : 0;
+    const rewardAmount = signal.tp > 0 ? Math.abs(signal.tp - signal.price) * signal.lots * 100000 : 0;
+    const rrRatio = riskAmount > 0 ? (rewardAmount / riskAmount).toFixed(2) : "N/A";
+
+    // Show detailed confirmation dialog
     Alert.alert(
-      "Execute Signal",
-      `Execute ${signal.symbol} ${signal.type} signal with minimum lot size (0.01)?`,
+      "🎯 Execute Signal",
+      `Execute ${signal.symbol} ${signal.action} signal?
+      
+📊 Signal Details:
+• Source: ${signal.source}
+• Entry: ${signal.price.toFixed(5)}
+• Stop Loss: ${signal.sl > 0 ? signal.sl.toFixed(5) : 'None'}
+• Take Profit: ${signal.tp > 0 ? signal.tp.toFixed(5) : 'None'}
+• Lot Size: ${signal.lots}
+• Risk/Reward: 1:${rrRatio}
+• Confidence: ${signal.confidence}%`,
       [
-        { text: "Cancel", style: "cancel" },
+        { text: "❌ Cancel", style: "cancel" },
         {
-          text: "Execute",
+          text: "✅ Execute",
           onPress: async () => {
             setExecutingIds(prev => new Set([...prev, signal.id]));
 
@@ -91,21 +86,23 @@ export default function SignalsScreen() {
               const command = {
                 action: 'OPEN_POSITION',
                 symbol: signal.symbol,
-                type: signal.type === 'BUY' ? 0 : 1, // Convert string to number
-                lots: 0.01, // Minimum lot size as requested
+                type: signal.action === 'BUY' ? 0 : 1,
+                lots: signal.lots,
                 sl: signal.sl || 0,
                 tp: signal.tp || 0,
                 status: 'PENDING',
                 timestamp: Math.floor(Date.now() / 1000)
               };
 
-              console.log('Sending signal execution command:', JSON.stringify(command, null, 2));
-              console.log('Firebase path:', `commands/${selectedAccount}/latest`);
-
               await set(commandRef, command);
-              Alert.alert("Success", `Signal execution command sent for ${signal.symbol}.`);
+
+              // Update signal status to executed
+              const signalRef = ref(database, `signals/${selectedAccount}/${signal.id}`);
+              await update(signalRef, { status: 'executed' });
+
+              Alert.alert("✅ Success", `Signal executed for ${signal.symbol} ${signal.action}`);
             } catch {
-              Alert.alert("Error", "Failed to execute signal.");
+              Alert.alert("❌ Error", "Failed to execute signal.");
             } finally {
               setExecutingIds(prev => {
                 const newSet = new Set(prev);
@@ -119,53 +116,115 @@ export default function SignalsScreen() {
     );
   };
 
+  const rejectSignal = async (signal: Signal) => {
+    try {
+      const signalRef = ref(database, `signals/${selectedAccount}/${signal.id}`);
+      await update(signalRef, { status: 'rejected' });
+      Alert.alert("Signal Rejected", `${signal.symbol} ${signal.action} signal marked as rejected`);
+    } catch {
+      Alert.alert("Error", "Failed to reject signal");
+    }
+  };
+
   const formatTime = (timestamp: number) => {
     const date = new Date(timestamp * 1000);
     return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
 
-  const renderItem = ({ item }: { item: Signal }) => (
-    <View style={[styles.card, { backgroundColor: theme.colors.card }]}>
-      <View style={styles.cardHeader}>
-        <Text style={[styles.symbol, { color: theme.colors.text }]}>{item.symbol}</Text>
-        <Text style={[styles.type, { color: item.type === 'BUY' ? theme.colors.buy : theme.colors.sell }]}>
-          {item.type}
-        </Text>
-      </View>
+  const renderItem = ({ item }: { item: Signal }) => {
+    const getStatusColor = () => {
+      switch (item.status) {
+        case 'executed': return theme.colors.profit;
+        case 'rejected': return theme.colors.loss;
+        case 'expired': return theme.colors.textSecondary;
+        default: return theme.colors.warning;
+      }
+    };
 
-      <Text style={[styles.strategy, { color: theme.colors.textSecondary }]}>Strategy: {item.strategy}</Text>
-      <Text style={[styles.time, { color: theme.colors.textTertiary }]}>{formatTime(item.timestamp)}</Text>
+    const getStatusIcon = () => {
+      switch (item.status) {
+        case 'executed': return '✅';
+        case 'rejected': return '❌';
+        case 'expired': return '⏰';
+        default: return '⏳';
+      }
+    };
 
-      <View style={styles.priceInfo}>
-        <View>
-          <Text style={[styles.label, { color: theme.colors.textSecondary }]}>Price</Text>
-          <Text style={[styles.value, { color: theme.colors.text }]}>{item.price}</Text>
+    return (
+      <View style={[styles.card, { backgroundColor: theme.colors.card }]}>
+        <View style={styles.cardHeader}>
+          <View>
+            <Text style={[styles.symbol, { color: theme.colors.text }]}>{item.symbol}</Text>
+            <Text style={[styles.source, { color: theme.colors.textSecondary }]}>📡 {item.source}</Text>
+          </View>
+          <View style={styles.headerRight}>
+            <Text style={[styles.type, { color: item.action === 'BUY' ? theme.colors.buy : theme.colors.sell }]}>
+              {item.action}
+            </Text>
+            <View style={[styles.statusBadge, { backgroundColor: getStatusColor() }]}>
+              <Text style={styles.statusText}>{getStatusIcon()} {item.status.toUpperCase()}</Text>
+            </View>
+          </View>
         </View>
-        <View>
-          <Text style={[styles.label, { color: theme.colors.textSecondary }]}>Stop Loss</Text>
-          <Text style={[styles.value, { color: theme.colors.text }]}>{item.sl || '-'}</Text>
-        </View>
-        <View>
-          <Text style={[styles.label, { color: theme.colors.textSecondary }]}>Take Profit</Text>
-          <Text style={[styles.value, { color: theme.colors.text }]}>{item.tp || '-'}</Text>
-        </View>
-      </View>
 
-      <TouchableOpacity
-        style={[styles.executeButton, { backgroundColor: theme.colors.buttonBackground }]}
-        onPress={() => executeSignal(item)}
-        disabled={executingIds.has(item.id)}
-      >
-        {executingIds.has(item.id) ? (
-          <ActivityIndicator color={theme.colors.text} size="small" />
-        ) : (
-          <Text style={[styles.executeButtonText, { color: theme.colors.text }]}>
-            Execute Signal
-          </Text>
+        <View style={styles.signalInfo}>
+          <View style={styles.confidenceContainer}>
+            <Text style={[styles.confidence, { color: theme.colors.text }]}>
+              🎯 {item.confidence}% Confidence
+            </Text>
+            <Text style={[styles.lots, { color: theme.colors.textSecondary }]}>
+              Size: {item.lots} lots
+            </Text>
+          </View>
+          <Text style={[styles.time, { color: theme.colors.textTertiary }]}>{formatTime(item.timestamp)}</Text>
+        </View>
+
+        <View style={styles.priceInfo}>
+          <View>
+            <Text style={[styles.label, { color: theme.colors.textSecondary }]}>Entry</Text>
+            <Text style={[styles.value, { color: theme.colors.text }]}>{item.price.toFixed(5)}</Text>
+          </View>
+          <View>
+            <Text style={[styles.label, { color: theme.colors.textSecondary }]}>Stop Loss</Text>
+            <Text style={[styles.value, { color: theme.colors.loss }]}>
+              {item.sl > 0 ? item.sl.toFixed(5) : 'None'}
+            </Text>
+          </View>
+          <View>
+            <Text style={[styles.label, { color: theme.colors.textSecondary }]}>Take Profit</Text>
+            <Text style={[styles.value, { color: theme.colors.profit }]}>
+              {item.tp > 0 ? item.tp.toFixed(5) : 'None'}
+            </Text>
+          </View>
+        </View>
+
+        {item.status === 'pending' && (
+          <View style={styles.actionButtons}>
+            <TouchableOpacity
+              style={[styles.rejectButton, { backgroundColor: theme.colors.error }]}
+              onPress={() => rejectSignal(item)}
+            >
+              <Text style={styles.rejectButtonText}>❌ Reject</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.executeButton, { backgroundColor: theme.colors.primary }]}
+              onPress={() => executeSignal(item)}
+              disabled={executingIds.has(item.id)}
+            >
+              {executingIds.has(item.id) ? (
+                <ActivityIndicator color="#fff" size="small" />
+              ) : (
+                <Text style={styles.executeButtonText}>
+                  ✅ Execute
+                </Text>
+              )}
+            </TouchableOpacity>
+          </View>
         )}
-      </TouchableOpacity>
-    </View>
-  );
+      </View>
+    );
+  };
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.background }]}>
@@ -291,15 +350,64 @@ const styles = StyleSheet.create({
     marginTop: 40,
     color: '#999',
   },
-  executeButton: {
-    backgroundColor: '#2196F3',
-    paddingHorizontal: 16,
+  source: {
+    fontSize: 12,
+    color: '#666',
+    marginTop: 2,
+  },
+  headerRight: {
+    flexDirection: 'column',
+    alignItems: 'flex-end',
+    gap: 4,
+  },
+  statusBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  statusText: {
+    color: '#FFF',
+    fontSize: 10,
+    fontWeight: 'bold',
+  },
+  signalInfo: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginVertical: 8,
+  },
+  confidenceContainer: {
+    flexDirection: 'column',
+    gap: 4,
+  },
+  confidence: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  lots: {
+    fontSize: 12,
+  },
+  actionButtons: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 16,
+  },
+  rejectButton: {
+    flex: 1,
     paddingVertical: 10,
     borderRadius: 8,
-    marginTop: 12,
     alignItems: 'center',
-    justifyContent: 'center',
-    minHeight: 40,
+  },
+  rejectButtonText: {
+    color: '#FFF',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  executeButton: {
+    flex: 2,
+    paddingVertical: 10,
+    borderRadius: 8,
+    alignItems: 'center',
   },
   executeButtonText: {
     color: '#FFF',

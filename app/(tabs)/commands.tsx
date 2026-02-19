@@ -4,6 +4,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { database } from '@/firebaseConfig';
 import { ref, set } from 'firebase/database';
 import { AccountSelector } from '@/components/AccountSelector';
+import { EAScheduleManager } from '@/components/EAScheduleManager';
+import { EASettingsManager } from '@/components/EASettingsManager';
 import { useAccount } from '@/contexts/AccountContext';
 import { useTheme } from '@/contexts/ThemeContext';
 
@@ -115,6 +117,15 @@ export default function CommandsScreen() {
             </TouchableOpacity>
           </View>
         </View>
+
+        {/* EA Schedule Management */}
+        <View style={[styles.card, { backgroundColor: theme.colors.card }]}>
+          <Text style={[styles.cardTitle, { color: theme.colors.text }]}>🕐 EA Schedule</Text>
+          <EAScheduleManager onUpdate={() => { }} />
+        </View>
+
+        {/* EA Global Settings */}
+        <EASettingsManager onUpdate={() => { }} />
 
       </ScrollView>
     </SafeAreaView>

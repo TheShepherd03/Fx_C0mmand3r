@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -7,7 +7,8 @@ import {
   TouchableOpacity,
   ScrollView,
   Pressable,
-  Alert
+  Alert,
+  TextInput
 } from 'react-native';
 import { Position } from '@/constants/types';
 import { useTheme } from '@/contexts/ThemeContext';
@@ -17,12 +18,105 @@ interface PositionDetailsModalProps {
   visible: boolean;
   onClose: () => void;
   onScalePosition?: (scaleFactor: number) => void;
+  onModifySLTP?: (ticket: number, sl: number, tp: number) => void;
 }
 
-export function PositionDetailsModal({ position, visible, onClose, onScalePosition }: PositionDetailsModalProps) {
+export function PositionDetailsModal({ position, visible, onClose, onScalePosition, onModifySLTP }: PositionDetailsModalProps) {
   const { theme } = useTheme();
+  const [editableSL, setEditableSL] = useState('');
+  const [editableTP, setEditableTP] = useState('');
+  const [hasChanges, setHasChanges] = useState(false);
+
+  // Initialize editable values when position changes
+  useEffect(() => {
+    if (position) {
+      setEditableSL(position.sl > 0 ? position.sl.toString() : '');
+      setEditableTP(position.tp > 0 ? position.tp.toString() : '');
+      setHasChanges(false);
+    }
+  }, [position]);
 
   if (!position) return null;
+
+  // Handle SL/TP input changes
+  const handleSLChange = (value: string) => {
+    setEditableSL(value);
+    setHasChanges(true);
+  };
+
+  const handleTPChange = (value: string) => {
+    setEditableTP(value);
+    setHasChanges(true);
+  };
+
+  // Calculate monetary value for SL change
+  const calculateSLValue = () => {
+    const sl = parseFloat(editableSL);
+    if (!sl || sl <= 0) return 0;
+
+    let priceDifference: number;
+    if (position.type === 0) { // BUY
+      priceDifference = Math.abs(position.openPrice - sl);
+    } else { // SELL
+      priceDifference = Math.abs(sl - position.openPrice);
+    }
+
+    const { contractSize } = getContractSpecs(position.symbol);
+    return -(priceDifference * contractSize * position.lots);
+  };
+
+  // Calculate monetary value for TP change
+  const calculateTPValue = () => {
+    const tp = parseFloat(editableTP);
+    if (!tp || tp <= 0) return 0;
+
+    let priceDifference: number;
+    if (position.type === 0) { // BUY
+      priceDifference = Math.abs(tp - position.openPrice);
+    } else { // SELL
+      priceDifference = Math.abs(position.openPrice - tp);
+    }
+
+    const { contractSize } = getContractSpecs(position.symbol);
+    return priceDifference * contractSize * position.lots;
+  };
+
+  // Save SL/TP changes
+  const handleSaveChanges = () => {
+    if (!onModifySLTP) {
+      Alert.alert("Error", "SL/TP modification not available");
+      return;
+    }
+
+    const sl = parseFloat(editableSL) || 0;
+    const tp = parseFloat(editableTP) || 0;
+
+    Alert.alert(
+      "Modify Position",
+      `Update Stop Loss to ${sl > 0 ? formatPrice(sl) : 'None'} and Take Profit to ${tp > 0 ? formatPrice(tp) : 'None'}?`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Update",
+          onPress: () => {
+            onModifySLTP(position.ticket, sl, tp);
+            setHasChanges(false);
+          }
+        }
+      ]
+    );
+  };
+
+  // Get contract specifications
+  const getContractSpecs = (symbol: string) => {
+    if (symbol.includes('XAU') || symbol.includes('Gold')) {
+      return { contractSize: 100 }; // Gold: 100 oz per lot
+    } else if (symbol.includes('JPY')) {
+      return { contractSize: 100000 }; // JPY pairs: 100k units per lot
+    } else {
+      return { contractSize: 100000 }; // Major pairs: 100k units per lot
+    }
+  };
 
   // Calculate position duration
   const getDuration = (openTime: number) => {
@@ -168,38 +262,84 @@ export function PositionDetailsModal({ position, visible, onClose, onScalePositi
               </View>
             </View>
 
-            {/* Price Information */}
+            {/* Position Configuration */}
             <View style={[styles.section, { borderTopColor: theme.colors.divider }]}>
-              <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>Price Information</Text>
+              <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>Position Configuration</Text>
 
               <View style={styles.priceRow}>
                 <Text style={[styles.priceLabel, { color: theme.colors.textSecondary }]}>Entry Price</Text>
                 <Text style={[styles.priceValue, { color: theme.colors.text }]}>{formatPrice(position.openPrice)}</Text>
               </View>
 
-              <View style={styles.priceRow}>
-                <Text style={[styles.priceLabel, { color: theme.colors.textSecondary }]}>Current Price</Text>
-                <Text style={[
-                  styles.priceValue,
-                  { color: position.profit >= 0 ? theme.colors.profit : theme.colors.loss }
-                ]}>
-                  {formatPrice(position.currentPrice)}
-                </Text>
+              {/* Configurable Stop Loss */}
+              <View style={styles.configRow}>
+                <Text style={[styles.configLabel, { color: theme.colors.textSecondary }]}>Stop Loss</Text>
+                <View style={styles.configInput}>
+                  <TextInput
+                    style={[
+                      styles.priceInput,
+                      {
+                        borderColor: theme.colors.border,
+                        color: theme.colors.text,
+                        backgroundColor: theme.colors.background
+                      }
+                    ]}
+                    value={editableSL}
+                    onChangeText={handleSLChange}
+                    placeholder="0.00000"
+                    placeholderTextColor={theme.colors.textSecondary}
+                    keyboardType="numeric"
+                  />
+                  <View style={styles.monetaryValue}>
+                    <Text style={[
+                      styles.monetaryText,
+                      { color: theme.colors.loss }
+                    ]}>
+                      {editableSL && parseFloat(editableSL) > 0 ? formatCurrency(calculateSLValue()) : '$0.00'}
+                    </Text>
+                  </View>
+                </View>
               </View>
 
-              <View style={styles.priceRow}>
-                <Text style={[styles.priceLabel, { color: theme.colors.textSecondary }]}>Stop Loss</Text>
-                <Text style={[styles.priceValue, { color: theme.colors.text }]}>
-                  {position.sl > 0 ? formatPrice(position.sl) : 'None'}
-                </Text>
+              {/* Configurable Take Profit */}
+              <View style={styles.configRow}>
+                <Text style={[styles.configLabel, { color: theme.colors.textSecondary }]}>Take Profit</Text>
+                <View style={styles.configInput}>
+                  <TextInput
+                    style={[
+                      styles.priceInput,
+                      {
+                        borderColor: theme.colors.border,
+                        color: theme.colors.text,
+                        backgroundColor: theme.colors.background
+                      }
+                    ]}
+                    value={editableTP}
+                    onChangeText={handleTPChange}
+                    placeholder="0.00000"
+                    placeholderTextColor={theme.colors.textSecondary}
+                    keyboardType="numeric"
+                  />
+                  <View style={styles.monetaryValue}>
+                    <Text style={[
+                      styles.monetaryText,
+                      { color: theme.colors.profit }
+                    ]}>
+                      {editableTP && parseFloat(editableTP) > 0 ? formatCurrency(calculateTPValue()) : '$0.00'}
+                    </Text>
+                  </View>
+                </View>
               </View>
 
-              <View style={styles.priceRow}>
-                <Text style={[styles.priceLabel, { color: theme.colors.textSecondary }]}>Take Profit</Text>
-                <Text style={[styles.priceValue, { color: theme.colors.text }]}>
-                  {position.tp > 0 ? formatPrice(position.tp) : 'None'}
-                </Text>
-              </View>
+              {/* Save Changes Button */}
+              {hasChanges && (
+                <TouchableOpacity
+                  style={[styles.saveButton, { backgroundColor: theme.colors.primary }]}
+                  onPress={handleSaveChanges}
+                >
+                  <Text style={styles.saveButtonText}>💾 Save Changes</Text>
+                </TouchableOpacity>
+              )}
             </View>
 
             {/* P&L Information */}
@@ -442,7 +582,50 @@ const styles = StyleSheet.create({
   detailValue: {
     fontSize: 16,
     color: '#333',
+    fontWeight: '600',
+  },
+  configRow: {
+    marginBottom: 16,
+  },
+  configLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 8,
+  },
+  configInput: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  priceInput: {
+    flex: 1,
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 16,
     fontFamily: 'monospace',
+  },
+  monetaryValue: {
+    minWidth: 100,
+    alignItems: 'flex-end',
+  },
+  monetaryText: {
+    fontSize: 14,
+    fontWeight: '600',
+    fontFamily: 'monospace',
+  },
+  saveButton: {
+    marginTop: 16,
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  saveButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
   },
   scalingDesc: {
     fontSize: 14,
