@@ -18,6 +18,7 @@ export default function SignalsScreen() {
   const [loading, setLoading] = useState(true);
   const [executingIds, setExecutingIds] = useState<Set<string>>(new Set());
   const [activeFilter, setActiveFilter] = useState('All Signals');
+  const [activeSource, setActiveSource] = useState('All');
   const [searchQuery, setSearchQuery] = useState('');
   const [showSearch, setShowSearch] = useState(false);
 
@@ -132,8 +133,17 @@ export default function SignalsScreen() {
     return new Date(timestamp * 1000).toLocaleDateString();
   };
 
+  const sources = Array.from(new Set(signals.map(s => s.source).filter(Boolean))).sort();
+
   const getFilteredSignals = () => {
-    let filtered = signals;
+    const now = Math.floor(Date.now() / 1000);
+    // Drop expired discrete signals (EMA/live signals carry no expiresAt)
+    let filtered = signals.filter(s => !(s.expiresAt && s.expiresAt < now));
+
+    // Source filter
+    if (activeSource !== 'All') {
+      filtered = filtered.filter(s => (s.source || '') === activeSource);
+    }
 
     // Search filter
     if (searchQuery) {
@@ -330,6 +340,33 @@ export default function SignalsScreen() {
         />
       </View>
 
+      {/* Source filter (by signal strategy) */}
+      {sources.length > 0 && (
+        <View style={styles.filterContainer}>
+          <FlatList
+            data={['All', ...sources]}
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.filterList}
+            keyExtractor={item => 'src-' + item}
+            renderItem={({ item }) => (
+              <TouchableOpacity
+                style={[
+                  styles.sourcePill,
+                  { borderColor: theme.colors.border },
+                  activeSource === item && { backgroundColor: theme.colors.info + '22', borderColor: theme.colors.info }
+                ]}
+                onPress={() => setActiveSource(item)}
+              >
+                <Text style={[styles.sourceText, { color: activeSource === item ? theme.colors.info : theme.colors.textSecondary }]}>
+                  {item === 'All' ? 'All sources' : item}
+                </Text>
+              </TouchableOpacity>
+            )}
+          />
+        </View>
+      )}
+
       <AccountSelector />
 
       {/* Signal List */}
@@ -405,6 +442,16 @@ const styles = StyleSheet.create({
   },
   filterText: {
     fontSize: 14,
+    fontWeight: '600',
+  },
+  sourcePill: {
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: 16,
+    borderWidth: 1,
+  },
+  sourceText: {
+    fontSize: 13,
     fontWeight: '600',
   },
   listContent: {

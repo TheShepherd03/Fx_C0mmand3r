@@ -80,8 +80,9 @@ export interface Signal {
   lots: number;
   source: string; // Telegram channel name, EA name, etc.
   timestamp: number;
-  status: 'pending' | 'executed' | 'rejected' | 'expired';
+  status: 'pending' | 'executed' | 'rejected' | 'expired' | 'winning' | 'range';
   confidence: number; // 0-100 confidence level
+  expiresAt?: number;    // unix seconds; discrete signals hide themselves after this
   description?: string;
   riskRewardRatio?: number;
   timeframe?: string;
