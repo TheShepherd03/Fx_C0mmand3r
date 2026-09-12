@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { database } from '@/firebaseConfig';
+import { database, authReady } from '@/firebaseConfig';
 import { ref, onValue, off, remove } from 'firebase/database';
 
 interface AccountContextType {
@@ -41,11 +41,24 @@ export function AccountProvider({ children }: AccountProviderProps) {
       setLoading(false);
     };
 
-    onValue(accountsRef, onDataChange);
+    let cancelled = false;
+    let detach = () => {};
+
+    // Wait for anonymous sign-in before reading, so the listener isn't cancelled
+    // with "permission denied" under the auth != null rules.
+    authReady.then(() => {
+      if (cancelled) return;
+      onValue(accountsRef, onDataChange, (error) => {
+        console.error('Failed to read accounts:', error);
+        setLoading(false);
+      });
+      detach = () => off(accountsRef, 'value', onDataChange);
+    });
 
     // Cleanup
     return () => {
-      off(accountsRef, 'value', onDataChange);
+      cancelled = true;
+      detach();
     };
   }, [selectedAccount]);
 

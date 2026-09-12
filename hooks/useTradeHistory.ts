@@ -1,45 +1,43 @@
 import { useState, useEffect } from 'react';
-import { ref, query, orderByChild, limitToLast, onValue } from 'firebase/database';
+import { ref, onValue } from 'firebase/database';
 import { database, authReady } from '../firebaseConfig';
-import { HistoryPoint } from '../constants/types';
+import { ClosedTrade } from '../constants/types';
 import { useAccount } from '@/contexts/AccountContext';
 
-export function useHistoryData() {
+// Reads the last 30 days of closed trades the EA syncs to tradeHistory/{account}.
+export function useTradeHistory() {
   const { selectedAccount } = useAccount();
-  const [history, setHistory] = useState<HistoryPoint[]>([]);
+  const [trades, setTrades] = useState<ClosedTrade[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (!selectedAccount) {
-      setHistory([]);
+      setTrades([]);
       setLoading(false);
       return;
     }
 
-    const historyRef = query(
-      ref(database, `history/${selectedAccount}`),
-      orderByChild('timestamp'),
-      limitToLast(50) // Last ~12 hours if 15min interval
-    );
-
+    setLoading(true);
     let cancelled = false;
     let unsubscribe = () => {};
 
     // Wait for anonymous sign-in before reading (auth != null rules).
     authReady.then(() => {
       if (cancelled) return;
-      unsubscribe = onValue(historyRef, (snapshot) => {
+      const tradesRef = ref(database, `tradeHistory/${selectedAccount}`);
+      unsubscribe = onValue(tradesRef, (snapshot) => {
         const val = snapshot.val();
         if (val) {
-          const list = Object.keys(val).map(key => val[key])
-            .sort((a, b) => a.timestamp - b.timestamp);
-          setHistory(list);
+          const list = Object.values(val) as ClosedTrade[];
+          // Newest first
+          list.sort((a, b) => b.closeTime - a.closeTime);
+          setTrades(list);
         } else {
-          setHistory([]);
+          setTrades([]);
         }
         setLoading(false);
       }, (error) => {
-        console.error('Failed to read history:', error);
+        console.error('Failed to read trade history:', error);
         setLoading(false);
       });
     });
@@ -50,5 +48,5 @@ export function useHistoryData() {
     };
   }, [selectedAccount]);
 
-  return { history, loading };
+  return { trades, loading };
 }

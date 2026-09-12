@@ -39,6 +39,8 @@ export function PositionManagementModal({
   // Break-even settings
   const [breakevenEnabled, setBreakevenEnabled] = useState(false);
   const [breakevenThreshold, setBreakevenThreshold] = useState('10');
+  const [breakevenMode, setBreakevenMode] = useState<'pips' | 'percent'>('pips');
+  const [breakevenPercent, setBreakevenPercent] = useState('0.5');
 
   // Trailing stop settings
   const [trailingEnabled, setTrailingEnabled] = useState(false);
@@ -92,8 +94,10 @@ export function PositionManagementModal({
 
     const success = await sendCommand('SET_BREAKEVEN', {
       ticket: position.ticket,
-      threshold: parseInt(breakevenThreshold),
-      enabled: breakevenEnabled
+      enabled: breakevenEnabled,
+      usePercent: breakevenMode === 'percent',
+      percent: breakevenMode === 'percent' ? parseFloat(breakevenPercent) || 0 : 0,
+      threshold: breakevenMode === 'pips' ? parseInt(breakevenThreshold) || 0 : 0
     });
 
     if (success) {
@@ -256,26 +260,71 @@ export function PositionManagementModal({
                 </View>
 
                 <Text style={[styles.description, { color: theme.colors.textSecondary }]}>
-                  Move stop loss to entry price when profit reaches threshold
+                  Move stop loss to entry price when the trade reaches the threshold below
                 </Text>
 
-                <View style={styles.inputGroup}>
-                  <Text style={[styles.inputLabel, { color: theme.colors.text }]}>
-                    Profit Threshold (pips)
-                  </Text>
-                  <TextInput
-                    style={[styles.input, {
-                      backgroundColor: theme.colors.input,
-                      color: theme.colors.text,
-                      borderColor: theme.colors.border
-                    }]}
-                    value={breakevenThreshold}
-                    onChangeText={setBreakevenThreshold}
-                    placeholder="10"
-                    keyboardType="numeric"
-                    placeholderTextColor={theme.colors.textTertiary}
-                  />
+                {/* Mode: pips vs percent (percent = price move from entry, handy when pips differ per symbol) */}
+                <View style={styles.modeToggle}>
+                  {(['pips', 'percent'] as const).map((mode) => (
+                    <TouchableOpacity
+                      key={mode}
+                      style={[
+                        styles.modeButton,
+                        { borderColor: theme.colors.border },
+                        breakevenMode === mode && { backgroundColor: theme.colors.primary, borderColor: theme.colors.primary }
+                      ]}
+                      onPress={() => setBreakevenMode(mode)}
+                    >
+                      <Text style={[
+                        styles.modeButtonText,
+                        { color: breakevenMode === mode ? '#fff' : theme.colors.text }
+                      ]}>
+                        {mode === 'pips' ? 'Pips' : 'Percent'}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
                 </View>
+
+                {breakevenMode === 'pips' ? (
+                  <View style={styles.inputGroup}>
+                    <Text style={[styles.inputLabel, { color: theme.colors.text }]}>
+                      Profit Threshold (pips)
+                    </Text>
+                    <TextInput
+                      style={[styles.input, {
+                        backgroundColor: theme.colors.input,
+                        color: theme.colors.text,
+                        borderColor: theme.colors.border
+                      }]}
+                      value={breakevenThreshold}
+                      onChangeText={setBreakevenThreshold}
+                      placeholder="10"
+                      keyboardType="numeric"
+                      placeholderTextColor={theme.colors.textTertiary}
+                    />
+                  </View>
+                ) : (
+                  <View style={styles.inputGroup}>
+                    <Text style={[styles.inputLabel, { color: theme.colors.text }]}>
+                      Price Move from Entry (%)
+                    </Text>
+                    <TextInput
+                      style={[styles.input, {
+                        backgroundColor: theme.colors.input,
+                        color: theme.colors.text,
+                        borderColor: theme.colors.border
+                      }]}
+                      value={breakevenPercent}
+                      onChangeText={setBreakevenPercent}
+                      placeholder="0.5"
+                      keyboardType="numeric"
+                      placeholderTextColor={theme.colors.textTertiary}
+                    />
+                    <Text style={[styles.description, { color: theme.colors.textTertiary, marginTop: 6, marginBottom: 0 }]}>
+                      e.g. 0.5 = SL moves to entry once price is 0.5% in profit
+                    </Text>
+                  </View>
+                )}
 
                 <TouchableOpacity
                   style={[styles.saveButton, { backgroundColor: theme.colors.primary, opacity: isProcessing ? 0.7 : 1 }]}
@@ -626,6 +675,22 @@ const styles = StyleSheet.create({
   settingLabel: {
     fontSize: 16,
     fontWeight: '500',
+  },
+  modeToggle: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 16,
+  },
+  modeButton: {
+    flex: 1,
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  modeButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
   },
   inputGroup: {
     marginBottom: 20,

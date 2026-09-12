@@ -20,9 +20,10 @@ interface PositionDetailsModalProps {
   onClose: () => void;
   onScalePosition?: (scaleFactor: number) => void;
   onModifySLTP?: (ticket: number, sl: number, tp: number) => void;
+  onHedge?: () => void;
 }
 
-export function PositionDetailsModal({ position, visible, onClose, onScalePosition, onModifySLTP }: PositionDetailsModalProps) {
+export function PositionDetailsModal({ position, visible, onClose, onScalePosition, onModifySLTP, onHedge }: PositionDetailsModalProps) {
   const { theme } = useTheme();
   const [editableSL, setEditableSL] = useState('');
   const [editableTP, setEditableTP] = useState('');
@@ -50,37 +51,74 @@ export function PositionDetailsModal({ position, visible, onClose, onScalePositi
     setHasChanges(true);
   };
 
-  // Calculate monetary value for SL change
+  // Convert a price distance into account money for THIS position.
+  // Prefers the EA-provided tick value/size (accurate for FX, metals, and
+  // synthetic indices like Boom/Vol); falls back to the old contract-size
+  // heuristic only if the EA hasn't sent tick specs yet.
+  const moneyForPriceDiff = (priceDiff: number) => {
+    if (position.tickValue && position.tickSize && position.tickSize > 0) {
+      return (Math.abs(priceDiff) / position.tickSize) * position.tickValue * position.lots;
+    }
+    const { contractSize } = getContractSpecs(position.symbol);
+    return Math.abs(priceDiff) * contractSize * position.lots;
+  };
+
+  // Calculate monetary value for SL change (negative = loss)
   const calculateSLValue = () => {
     const sl = parseFloat(editableSL);
     if (!sl || sl <= 0) return 0;
-
-    let priceDifference: number;
-    if (position.type === 0) { // BUY
-      priceDifference = Math.abs(position.openPrice - sl);
-    } else { // SELL
-      priceDifference = Math.abs(sl - position.openPrice);
-    }
-
-    const { contractSize } = getContractSpecs(position.symbol);
-    return -(priceDifference * contractSize * position.lots);
+    return -moneyForPriceDiff(position.openPrice - sl);
   };
 
-  // Calculate monetary value for TP change
+  // Calculate monetary value for TP change (positive = profit)
   const calculateTPValue = () => {
     const tp = parseFloat(editableTP);
     if (!tp || tp <= 0) return 0;
-
-    let priceDifference: number;
-    if (position.type === 0) { // BUY
-      priceDifference = Math.abs(tp - position.openPrice);
-    } else { // SELL
-      priceDifference = Math.abs(position.openPrice - tp);
-    }
-
-    const { contractSize } = getContractSpecs(position.symbol);
-    return priceDifference * contractSize * position.lots;
+    return moneyForPriceDiff(tp - position.openPrice);
   };
+
+  // Multiply the SL or TP *distance from entry* by a factor, then update the field.
+  // e.g. x2 moves the level to twice its current distance from the entry price.
+  const applyMultiplier = (field: 'sl' | 'tp', factor: number) => {
+    if (!factor || factor <= 0) return;
+    const current = parseFloat(field === 'sl' ? editableSL : editableTP);
+    if (!current || current <= 0) {
+      Alert.alert(
+        'Set a value first',
+        `Enter a ${field === 'sl' ? 'Stop Loss' : 'Take Profit'} price before multiplying its distance from entry.`
+      );
+      return;
+    }
+    const scaled = position.openPrice + (current - position.openPrice) * factor;
+    const next = formatPrice(scaled);
+    if (field === 'sl') setEditableSL(next);
+    else setEditableTP(next);
+    setHasChanges(true);
+  };
+
+  // Compact "multiply distance from entry" controls shown under each SL/TP input
+  const renderMultiplierRow = (field: 'sl' | 'tp') => (
+    <View style={styles.multiplierRow}>
+      <Text style={[styles.multiplierLabel, { color: theme.colors.textTertiary }]}>× distance</Text>
+      {[1.5, 2, 3].map((f) => (
+        <TouchableOpacity
+          key={f}
+          style={[styles.multChip, { backgroundColor: theme.colors.input, borderColor: theme.colors.border }]}
+          onPress={() => applyMultiplier(field, f)}
+        >
+          <Text style={[styles.multChipText, { color: theme.colors.primary }]}>×{f}</Text>
+        </TouchableOpacity>
+      ))}
+      <TextInput
+        style={[styles.multCustomInput, { backgroundColor: theme.colors.input, color: theme.colors.text, borderColor: theme.colors.border }]}
+        placeholder="×?"
+        placeholderTextColor={theme.colors.textTertiary}
+        keyboardType="numeric"
+        returnKeyType="done"
+        onSubmitEditing={(e) => applyMultiplier(field, parseFloat(e.nativeEvent.text))}
+      />
+    </View>
+  );
 
   // Save SL/TP changes
   const handleSaveChanges = () => {
@@ -140,63 +178,13 @@ export function PositionDetailsModal({ position, visible, onClose, onScalePositi
   // Calculate position risk (distance from entry to SL)
   const calculateRisk = () => {
     if (position.sl === 0) return 0;
-
-    let priceDifference: number;
-
-    if (position.type === 0) { // BUY
-      priceDifference = Math.abs(position.openPrice - position.sl);
-    } else { // SELL
-      priceDifference = Math.abs(position.sl - position.openPrice);
-    }
-
-    // Get contract size and pip value per symbol
-    const getContractSpecs = (symbol: string) => {
-      if (symbol.includes('XAU') || symbol.includes('Gold')) {
-        return { contractSize: 100, pipValue: 0.1 }; // Gold: 100 oz, $0.1 per pip per lot
-      } else if (symbol.includes('JPY')) {
-        return { contractSize: 100000, pipValue: 0.01 }; // JPY pairs: 100k units, $1 per pip per lot for 0.01 move
-      } else {
-        return { contractSize: 100000, pipValue: 0.0001 }; // Major pairs: 100k units, $1 per pip per lot for 0.0001 move
-      }
-    };
-
-    const { contractSize } = getContractSpecs(position.symbol);
-
-    // Calculate risk amount: price difference * contract size * lot size
-    const riskAmount = priceDifference * contractSize * position.lots;
-
-    return riskAmount;
+    return moneyForPriceDiff(position.openPrice - position.sl);
   };
 
   // Calculate potential profit (distance from entry to TP)
   const calculatePotentialProfit = () => {
     if (position.tp === 0) return 0;
-
-    let priceDifference: number;
-
-    if (position.type === 0) { // BUY
-      priceDifference = Math.abs(position.tp - position.openPrice);
-    } else { // SELL
-      priceDifference = Math.abs(position.openPrice - position.tp);
-    }
-
-    // Get contract size per symbol
-    const getContractSpecs = (symbol: string) => {
-      if (symbol.includes('XAU') || symbol.includes('Gold')) {
-        return { contractSize: 100 }; // Gold: 100 oz per lot
-      } else if (symbol.includes('JPY')) {
-        return { contractSize: 100000 }; // JPY pairs: 100k units per lot
-      } else {
-        return { contractSize: 100000 }; // Major pairs: 100k units per lot
-      }
-    };
-
-    const { contractSize } = getContractSpecs(position.symbol);
-
-    // Calculate potential profit: price difference * contract size * lot size
-    const potentialProfit = priceDifference * contractSize * position.lots;
-
-    return potentialProfit;
+    return moneyForPriceDiff(position.tp - position.openPrice);
   };
 
   // Format price display based on symbol
@@ -225,14 +213,21 @@ export function PositionDetailsModal({ position, visible, onClose, onScalePositi
       visible={visible}
       onRequestClose={onClose}
     >
-      <Pressable style={[styles.overlay, { backgroundColor: theme.colors.overlay }]} onPress={onClose}>
-        <Pressable style={[styles.modalContainer, { backgroundColor: theme.colors.card }]} onPress={(e) => e.stopPropagation()}>
+      <View style={[styles.overlay, { backgroundColor: theme.colors.overlay }]}>
+        {/* Tap-outside-to-close sits BEHIND the sheet so it never intercepts scroll */}
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
+        <View style={[styles.modalContainer, { backgroundColor: theme.colors.card }]}>
+          <View style={styles.grabber}>
+            <View style={[styles.grabberBar, { backgroundColor: theme.colors.border }]} />
+          </View>
           <ScrollView
             style={styles.modalContent}
+            contentContainerStyle={styles.modalScrollContent}
             showsVerticalScrollIndicator={true}
-            scrollIndicatorInsets={{ left: 0, right: 0, top: 0, bottom: 0 }}
             indicatorStyle={theme.isDark ? "white" : "black"}
             persistentScrollbar={true}
+            nestedScrollEnabled={true}
+            keyboardShouldPersistTaps="handled"
             scrollEventThrottle={16}
             bounces={true}
           >
@@ -300,6 +295,7 @@ export function PositionDetailsModal({ position, visible, onClose, onScalePositi
                     </Text>
                   </View>
                 </View>
+                {renderMultiplierRow('sl')}
               </View>
 
               {/* Configurable Take Profit */}
@@ -330,6 +326,7 @@ export function PositionDetailsModal({ position, visible, onClose, onScalePositi
                     </Text>
                   </View>
                 </View>
+                {renderMultiplierRow('tp')}
               </View>
 
               {/* Save Changes Button */}
@@ -420,6 +417,34 @@ export function PositionDetailsModal({ position, visible, onClose, onScalePositi
               </View>
             )}
 
+            {/* Hedge */}
+            {onHedge && (
+              <View style={[styles.section, { borderTopColor: theme.colors.border }]}>
+                <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>Hedge</Text>
+                <Text style={[styles.scalingDesc, { color: theme.colors.textSecondary }]}>
+                  Open an opposite {position.type === 0 ? 'SELL' : 'BUY'} position of {position.lots} lot{position.lots === 1 ? '' : 's'} to hedge this trade
+                </Text>
+                <TouchableOpacity
+                  style={[styles.hedgeButton, { backgroundColor: theme.colors.warning + '22', borderColor: theme.colors.warning }]}
+                  onPress={() => {
+                    Alert.alert(
+                      'Hedge Position',
+                      `Open an opposite ${position.type === 0 ? 'SELL' : 'BUY'} ${position.lots} lot ${position.symbol} position at market price?`,
+                      [
+                        { text: 'Cancel', style: 'cancel' },
+                        { text: 'Hedge', onPress: onHedge },
+                      ]
+                    );
+                  }}
+                >
+                  <IconSymbol name="arrow.triangle.2.circlepath" size={18} color={theme.colors.warning} />
+                  <Text style={[styles.hedgeButtonText, { color: theme.colors.warning }]}>
+                    Hedge with opposite {position.type === 0 ? 'SELL' : 'BUY'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
             {/* Technical Details */}
             <View style={[styles.section, { borderTopColor: theme.colors.border }]}>
               <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>Technical Details</Text>
@@ -438,8 +463,8 @@ export function PositionDetailsModal({ position, visible, onClose, onScalePositi
             </View>
 
           </ScrollView>
-        </Pressable>
-      </Pressable>
+        </View>
+      </View>
     </Modal>
   );
 }
@@ -460,6 +485,49 @@ const styles = StyleSheet.create({
   modalContent: {
     flex: 1,
     paddingHorizontal: 16,
+  },
+  modalScrollContent: {
+    paddingBottom: 40,
+  },
+  grabber: {
+    alignItems: 'center',
+    paddingTop: 10,
+    paddingBottom: 4,
+  },
+  grabberBar: {
+    width: 44,
+    height: 5,
+    borderRadius: 3,
+    opacity: 0.6,
+  },
+  multiplierRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 10,
+  },
+  multiplierLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  multChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  multChipText: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  multCustomInput: {
+    width: 56,
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    fontSize: 13,
+    textAlign: 'center',
   },
   content: {
     flex: 1,
@@ -664,5 +732,19 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#E3F2FD',
     marginTop: 2,
+  },
+  hedgeButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    borderWidth: 1,
+  },
+  hedgeButtonText: {
+    fontSize: 15,
+    fontWeight: '700',
   },
 });

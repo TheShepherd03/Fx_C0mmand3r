@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { StyleSheet, View, Text, TouchableOpacity, Alert, Switch, ScrollView, TextInput } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { database } from '@/firebaseConfig';
-import { ref, set, get } from 'firebase/database';
+import { ref, set, get, update } from 'firebase/database';
 import { AccountSelector } from '@/components/AccountSelector';
 import { useAccount } from '@/contexts/AccountContext';
 import { useAccountData } from '@/hooks/useAccountData';
@@ -17,10 +17,24 @@ export default function CommandsScreen() {
   // State
   const [autoTrading, setAutoTrading] = useState(true);
   const [hedgeMode, setHedgeMode] = useState(false);
-  const [breakevenOffset, setBreakevenOffset] = useState(15);
+  // Global break-even applied to trades opened while enabled (price move % from entry)
+  const [globalBreakevenEnabled, setGlobalBreakevenEnabled] = useState(false);
+  const [globalBreakevenPercent, setGlobalBreakevenPercent] = useState('0.5');
   const [dailyTarget, setDailyTarget] = useState('2500');
-  const [scheduleStatus] = useState('RUNNING');
-  const [serverTime] = useState('15:42:05'); // Placeholder, would come from backend in real app
+  // Live values derived from the selected account's real-time data
+  const isPaused = data?.isPaused ?? false;
+  const positions = data?.positions ?? [];
+  const winnersTotal = positions
+    .filter((p) => p.profit > 0)
+    .reduce((sum, p) => sum + p.profit, 0);
+  const losersTotal = positions
+    .filter((p) => p.profit < 0)
+    .reduce((sum, p) => sum + p.profit, 0);
+  const formatSigned = (n: number) => `${n >= 0 ? '+' : '-'}$${Math.abs(n).toFixed(2)}`;
+  // lastUpdated is the broker server-time epoch; rendered as HH:MM:SS (UTC == server clock)
+  const serverTime = data?.lastUpdated
+    ? new Date(data.lastUpdated * 1000).toISOString().substring(11, 19)
+    : '--:--:--';
 
   // Load initial settings
   useEffect(() => {
@@ -30,9 +44,10 @@ export default function CommandsScreen() {
           const settingsRef = ref(database, `settings/${selectedAccount}`);
           const snapshot = await get(settingsRef);
           if (snapshot.exists()) {
-            const data = snapshot.val();
-            if (data.breakevenThresholdPips !== undefined) setBreakevenOffset(data.breakevenThresholdPips);
-            // Add other settings mappings here
+            const s = snapshot.val();
+            if (s.enableBreakeven !== undefined) setGlobalBreakevenEnabled(!!s.enableBreakeven);
+            if (s.breakevenPercent !== undefined) setGlobalBreakevenPercent(String(s.breakevenPercent));
+            if (s.dailyTargetPercent !== undefined) setDailyTarget(String(s.dailyTargetPercent));
           }
         } catch {
           console.error();
@@ -62,6 +77,25 @@ export default function CommandsScreen() {
     }
   };
 
+  const handlePause = () => {
+    Alert.alert(
+      "Pause EA",
+      "Pause the EA? It will stop managing trades (breakeven, trailing, etc.) until you resume.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Pause",
+          style: "destructive",
+          onPress: () => sendCommand('SET_EA_PAUSE', { immediate: true, pauseDuration: 86400, pauseMode: 0 })
+        }
+      ]
+    );
+  };
+
+  const handleResume = () => {
+    sendCommand('SET_EA_PAUSE', { immediate: false });
+  };
+
   const handleKillSwitch = () => {
     Alert.alert(
       "⚠️ KILL SWITCH ACTIVATED",
@@ -84,13 +118,17 @@ export default function CommandsScreen() {
     if (!selectedAccount) return;
 
     try {
-      // Send a command to update the EA params live
-      await sendCommand('UPDATE_SETTINGS', {
-        breakevenThresholdPips: breakevenOffset,
-        dailyTarget: parseFloat(dailyTarget)
+      // Write to the settings node the EA polls (LoadEASettings), so it applies live
+      const settingsRef = ref(database, `settings/${selectedAccount}`);
+      await update(settingsRef, {
+        enableBreakeven: globalBreakevenEnabled,
+        breakevenUsePercent: true,
+        breakevenPercent: parseFloat(globalBreakevenPercent) || 0,
+        dailyTargetPercent: parseFloat(dailyTarget) || 0,
+        lastUpdated: Math.floor(Date.now() / 1000)
       });
 
-      Alert.alert("Saved", "Configuration updated successfully.");
+      Alert.alert("Saved", "Configuration updated. The EA applies it within ~10s and it takes effect on trades opened from now on.");
     } catch {
       Alert.alert("Error", "Failed to save configuration.");
     }
@@ -179,7 +217,7 @@ export default function CommandsScreen() {
             >
               <IconSymbol name="chart.line.uptrend.xyaxis" size={24} color={theme.colors.success} />
               <Text style={[styles.actionTitle, { color: theme.colors.text }]}>Close Winners</Text>
-              <Text style={[styles.actionValue, { color: theme.colors.success }]}>+$1,240.50</Text>
+              <Text style={[styles.actionValue, { color: theme.colors.success }]}>{formatSigned(winnersTotal)}</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
@@ -188,7 +226,7 @@ export default function CommandsScreen() {
             >
               <IconSymbol name="chart.line.downtrend.xyaxis" size={24} color={theme.colors.error} />
               <Text style={[styles.actionTitle, { color: theme.colors.text }]}>Close Losers</Text>
-              <Text style={[styles.actionValue, { color: theme.colors.error }]}>-$320.10</Text>
+              <Text style={[styles.actionValue, { color: theme.colors.error }]}>{formatSigned(losersTotal)}</Text>
             </TouchableOpacity>
           </View>
 
@@ -209,43 +247,37 @@ export default function CommandsScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* EA Schedule */}
+        {/* EA Control */}
         <View style={[styles.scheduleCard, { backgroundColor: theme.colors.card }]}>
           <View style={styles.scheduleHeader}>
             <View style={styles.scheduleTitleRow}>
               <IconSymbol name="clock.fill" size={16} color={theme.colors.textSecondary} />
-              <Text style={[styles.scheduleTitle, { color: theme.colors.textSecondary }]}>EA SCHEDULE</Text>
+              <Text style={[styles.scheduleTitle, { color: theme.colors.textSecondary }]}>EA CONTROL</Text>
             </View>
             <View style={styles.scheduleControls}>
-              <TouchableOpacity style={[styles.controlBtn, { backgroundColor: theme.colors.input }]}>
-                <Text style={[styles.controlBtnText, { color: theme.colors.textSecondary }]}>Pause</Text>
+              <TouchableOpacity
+                style={[styles.controlBtn, { backgroundColor: isPaused ? theme.colors.input : theme.colors.error + '22' }]}
+                onPress={handlePause}
+                disabled={isPaused}
+              >
+                <Text style={[styles.controlBtnText, { color: isPaused ? theme.colors.textTertiary : theme.colors.error }]}>Pause</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={[styles.controlBtn, { backgroundColor: theme.colors.primary }]}>
-                <Text style={[styles.controlBtnText, { color: '#FFF' }]}>Resume</Text>
+              <TouchableOpacity
+                style={[styles.controlBtn, { backgroundColor: isPaused ? theme.colors.primary : theme.colors.input }]}
+                onPress={handleResume}
+                disabled={!isPaused}
+              >
+                <Text style={[styles.controlBtnText, { color: isPaused ? '#FFF' : theme.colors.textTertiary }]}>Resume</Text>
               </TouchableOpacity>
             </View>
-          </View>
-
-          <View style={styles.timelineLabels}>
-            <Text style={styles.timelineTime}>00:00</Text>
-            <Text style={styles.timelineTime}>06:00</Text>
-            <Text style={styles.timelineTime}>12:00</Text>
-            <Text style={styles.timelineTime}>18:00</Text>
-            <Text style={styles.timelineTime}>24:00</Text>
-          </View>
-
-          <View style={[styles.timelineBar, { backgroundColor: theme.colors.input }]}>
-            {/* Visual representation of schedule - simplified */}
-            <View style={[styles.timelineActive, { left: '25%', width: '40%', backgroundColor: theme.colors.success }]} />
-            <View style={[styles.timelineActive, { left: '70%', width: '20%', backgroundColor: theme.colors.success }]} />
-            {/* Current time marker */}
-            <View style={[styles.timeMarker, { left: '65%', borderColor: theme.colors.warning }]} />
           </View>
 
           <View style={styles.scheduleFooter}>
             <View style={styles.statusRow}>
               <Text style={[styles.statusLabel, { color: theme.colors.textSecondary }]}>Status: </Text>
-              <Text style={[styles.statusValue, { color: theme.colors.success }]}>{scheduleStatus}</Text>
+              <Text style={[styles.statusValue, { color: isPaused ? theme.colors.warning : theme.colors.success }]}>
+                {isPaused ? 'PAUSED' : 'RUNNING'}
+              </Text>
             </View>
             <Text style={[styles.serverTime, { color: theme.colors.textSecondary }]}>Server Time: {serverTime}</Text>
           </View>
@@ -255,23 +287,38 @@ export default function CommandsScreen() {
         <View style={styles.section}>
           <Text style={[styles.sectionLabel, { color: theme.colors.textSecondary }]}>RISK PARAMETERS</Text>
 
-          <View style={[styles.paramCard, { backgroundColor: theme.colors.card }]}>
-            <View style={styles.paramIcon}>
-              <IconSymbol name="anchor" size={24} color={theme.colors.primary} />
+          <View style={[styles.paramCard, { backgroundColor: theme.colors.card, flexDirection: 'column', alignItems: 'stretch' }]}>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <View style={styles.paramIcon}>
+                <IconSymbol name="anchor" size={24} color={theme.colors.primary} />
+              </View>
+              <View style={styles.paramContent}>
+                <Text style={[styles.paramTitle, { color: theme.colors.text }]}>Global Break-Even</Text>
+                <Text style={[styles.paramSubtitle, { color: theme.colors.textSecondary }]}>Applies to trades opened while on</Text>
+              </View>
+              <Switch
+                value={globalBreakevenEnabled}
+                onValueChange={setGlobalBreakevenEnabled}
+                trackColor={{ false: theme.colors.input, true: theme.colors.primary }}
+                thumbColor="#FFF"
+              />
             </View>
-            <View style={styles.paramContent}>
-              <Text style={[styles.paramTitle, { color: theme.colors.text }]}>Breakeven Offset</Text>
-              <Text style={[styles.paramSubtitle, { color: theme.colors.textSecondary }]}>Pips after entry</Text>
-            </View>
-            <View style={[styles.stepper, { backgroundColor: theme.colors.input }]}>
-              <TouchableOpacity onPress={() => setBreakevenOffset(Math.max(0, breakevenOffset - 1))} style={styles.stepBtn}>
-                <Text style={[styles.stepText, { color: theme.colors.textSecondary }]}>−</Text>
-              </TouchableOpacity>
-              <Text style={[styles.stepValue, { color: theme.colors.text }]}>{breakevenOffset}</Text>
-              <TouchableOpacity onPress={() => setBreakevenOffset(breakevenOffset + 1)} style={styles.stepBtn}>
-                <Text style={[styles.stepText, { color: theme.colors.textSecondary }]}>+</Text>
-              </TouchableOpacity>
-            </View>
+            {globalBreakevenEnabled && (
+              <View style={{ marginTop: 14 }}>
+                <Text style={[styles.paramSubtitle, { color: theme.colors.text, marginBottom: 8 }]}>Price move from entry (%)</Text>
+                <View style={[styles.inputWrapper, { backgroundColor: theme.colors.input, alignSelf: 'flex-start', minWidth: 120 }]}>
+                  <TextInput
+                    style={[styles.paramInput, { color: theme.colors.text }]}
+                    value={globalBreakevenPercent}
+                    onChangeText={setGlobalBreakevenPercent}
+                    keyboardType="numeric"
+                    placeholder="0.5"
+                    placeholderTextColor={theme.colors.textTertiary}
+                  />
+                  <Text style={[styles.currencySymbol, { color: theme.colors.textSecondary, marginLeft: 4, marginRight: 0 }]}>%</Text>
+                </View>
+              </View>
+            )}
           </View>
 
           <View style={[styles.paramCard, { backgroundColor: theme.colors.card }]}>

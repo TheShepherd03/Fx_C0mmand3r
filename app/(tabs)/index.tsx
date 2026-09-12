@@ -162,28 +162,33 @@ export default function DashboardScreen() {
                       }
                     ]
                   }}
-                  width={Dimensions.get("window").width - 48}
+                  width={Dimensions.get("window").width - 64}
                   height={220}
                   yAxisLabel="$"
                   yAxisInterval={1}
+                  segments={4}
                   formatYLabel={(y) => {
                     const val = parseFloat(y);
-                    if (val >= 1000) return `${(val / 1000).toFixed(1)}k`;
-                    return val.toFixed(0);
+                    if (Math.abs(val) >= 1000) return val.toLocaleString('en-US', { maximumFractionDigits: 0 });
+                    return val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
                   }}
                   chartConfig={{
                     backgroundColor: theme.colors.card,
                     backgroundGradientFrom: theme.colors.card,
                     backgroundGradientTo: theme.colors.card,
-                    decimalPlaces: 0,
+                    decimalPlaces: 2,
                     color: (opacity = 1) => theme.colors.textSecondary,
-                    labelColor: (opacity = 1) => theme.colors.textSecondary,
+                    labelColor: (opacity = 1) => theme.colors.text,
+                    propsForLabels: { fontSize: 10 },
                     propsForDots: { r: "4", strokeWidth: "2", stroke: theme.colors.card },
                     propsForBackgroundLines: { strokeDasharray: "", stroke: theme.colors.border }
                   }}
                   bezier
                   style={styles.chart}
-                  withInnerLines={false}
+                  withHorizontalLabels={true}
+                  yLabelsOffset={12}
+                  withVerticalLines={false}
+                  withHorizontalLines={true}
                   withOuterLines={false}
                 />
               ) : (
@@ -339,9 +344,6 @@ const styles = StyleSheet.create({
   },
   chart: {
     borderRadius: 16,
-    paddingRight: 0,
-    paddingBottom: 0,
-    marginLeft: -20, // Adjust for chart padding
   },
   emptyChart: {
     height: 220,

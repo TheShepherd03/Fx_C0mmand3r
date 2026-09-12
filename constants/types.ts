@@ -10,6 +10,9 @@ export interface Position {
   tp: number;
   magic: number;
   openTime: number; // Unix timestamp of when position was opened
+  // Contract specs from the EA for accurate money math (money = priceDiff / tickSize * tickValue * lots)
+  tickValue?: number;
+  tickSize?: number;
   // Position management status
   breakevenEnabled?: boolean;
   breakevenTriggered?: boolean;
@@ -25,6 +28,7 @@ export interface AccountData {
   marginLevel: number;
   lastUpdated: number;
   isOnline: boolean;
+  isPaused?: boolean;
   positions?: Position[];
   orders?: Position[]; // Pending orders
 }
@@ -33,6 +37,18 @@ export interface HistoryPoint {
   timestamp: number;
   equity: number;
   balance: number;
+}
+
+export interface ClosedTrade {
+  ticket: number;      // position id
+  symbol: string;
+  type: number;        // 0 = Buy, 1 = Sell
+  lots: number;
+  entryPrice: number;
+  exitPrice: number;
+  profit: number;      // realized profit incl. swap + commission
+  openTime: number;    // unix seconds
+  closeTime: number;   // unix seconds
 }
 
 export interface PositionManagementSettings {

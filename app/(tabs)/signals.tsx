@@ -9,7 +9,7 @@ import { useTheme } from '@/contexts/ThemeContext';
 import { Signal } from '@/constants/types';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 
-const FILTERS = ['All Signals', 'Pending', 'Winning', 'VIP'];
+const FILTERS = ['All Signals', 'Pending', 'Winning'];
 
 export default function SignalsScreen() {
   const { selectedAccount } = useAccount();
@@ -149,9 +149,7 @@ export default function SignalsScreen() {
       case 'Pending':
         return filtered.filter(s => s.status === 'pending');
       case 'Winning':
-        return filtered.filter(s => s.status === 'executed'); // Simplified
-      case 'VIP':
-        return filtered.filter(s => s.source && s.source.toLowerCase().includes('vip'));
+        return filtered.filter(s => s.status === 'winning');
       default:
         return filtered;
     }
@@ -159,8 +157,12 @@ export default function SignalsScreen() {
 
   const renderItem = ({ item }: { item: Signal }) => {
     const isPending = item.status === 'pending';
+    const isWinning = item.status === 'winning';
     const isProcessing = executingIds.has(item.id);
     const isBuy = item.action === 'BUY';
+    const statusColor = isPending ? theme.colors.warning
+                      : (isWinning || item.status === 'executed') ? theme.colors.success
+                      : theme.colors.error;
 
     // Symbol Color (Simple hash)
     const getSymbolColor = (symbol: string) => {
@@ -185,14 +187,8 @@ export default function SignalsScreen() {
             <View>
               <View style={styles.titleRow}>
                 <Text style={[styles.symbolText, { color: theme.colors.text }]}>{item.symbol}</Text>
-                <View style={[
-                  styles.statusBadge,
-                  { backgroundColor: isPending ? theme.colors.warning + '20' : (item.status === 'executed' ? theme.colors.success + '20' : theme.colors.error + '20') }
-                ]}>
-                  <Text style={[
-                    styles.statusText,
-                    { color: isPending ? theme.colors.warning : (item.status === 'executed' ? theme.colors.success : theme.colors.error) }
-                  ]}>
+                <View style={[styles.statusBadge, { backgroundColor: statusColor + '20' }]}>
+                  <Text style={[styles.statusText, { color: statusColor }]}>
                     {item.status.toUpperCase()}
                   </Text>
                 </View>
@@ -240,8 +236,8 @@ export default function SignalsScreen() {
           </View>
         </View>
 
-        {/* Actions */}
-        {isPending && (
+        {/* Actions (live signals are actionable whether pending or already winning) */}
+        {(isPending || isWinning) && (
           <View style={styles.actionRow}>
             <TouchableOpacity
               style={[styles.rejectBtn, { borderColor: theme.colors.border }]}

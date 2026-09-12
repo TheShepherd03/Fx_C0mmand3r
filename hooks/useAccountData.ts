@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { ref, onValue } from 'firebase/database';
-import { database } from '../firebaseConfig'; // Adjust path as needed
+import { database, authReady } from '../firebaseConfig'; // Adjust path as needed
 import { AccountData } from '../constants/types';
 import { useAccount } from '@/contexts/AccountContext';
 
@@ -25,40 +25,50 @@ export function useAccountData() {
     setLoading(true);
     const accountRef = ref(database, `accounts/${selectedAccount}`);
 
-    const unsubscribe = onValue(accountRef, (snapshot) => {
-      const val = snapshot.val();
-      if (val) {
-        // Parse positions if they exist (MQL5 might send them as an object or array)
-        // Our Bridge EA sends an array, but Firebase might convert arrays to objects with numeric keys if sparse
-        let positions = [];
-        if (val.positions) {
-          if (Array.isArray(val.positions)) {
-            positions = val.positions;
-          } else {
-            positions = Object.values(val.positions);
-          }
-        }
+    let cancelled = false;
+    let unsubscribe = () => {};
 
-        let orders = [];
-        if (val.orders) {
-          if (Array.isArray(val.orders)) {
-            orders = val.orders;
-          } else {
-            orders = Object.values(val.orders);
+    // Wait for anonymous sign-in before reading (auth != null rules).
+    authReady.then(() => {
+      if (cancelled) return;
+      unsubscribe = onValue(accountRef, (snapshot) => {
+        const val = snapshot.val();
+        if (val) {
+          // Parse positions if they exist (MQL5 might send them as an object or array)
+          // Our Bridge EA sends an array, but Firebase might convert arrays to objects with numeric keys if sparse
+          let positions = [];
+          if (val.positions) {
+            if (Array.isArray(val.positions)) {
+              positions = val.positions;
+            } else {
+              positions = Object.values(val.positions);
+            }
           }
-        }
 
-        setData({ ...val, positions, orders });
-      } else {
-        setData(null);
-      }
-      setLoading(false);
-    }, (err) => {
-      setError(err.message);
-      setLoading(false);
+          let orders = [];
+          if (val.orders) {
+            if (Array.isArray(val.orders)) {
+              orders = val.orders;
+            } else {
+              orders = Object.values(val.orders);
+            }
+          }
+
+          setData({ ...val, positions, orders });
+        } else {
+          setData(null);
+        }
+        setLoading(false);
+      }, (err) => {
+        setError(err.message);
+        setLoading(false);
+      });
     });
 
-    return () => unsubscribe();
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
   }, [selectedAccount, refreshTrigger]);
 
   return { data, loading, error, refresh };

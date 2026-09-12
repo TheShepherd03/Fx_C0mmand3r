@@ -10,10 +10,12 @@ import {
   Alert,
   RefreshControl
 } from 'react-native';
-import { Position } from '@/constants/types';
+import { Position, ClosedTrade } from '@/constants/types';
 import { useAccount } from '@/contexts/AccountContext';
 import { PositionDetailsModal } from '@/components/PositionDetailsModal';
 import { PositionManagementModal } from '@/components/PositionManagementModal';
+import { ClosedTradeModal } from '@/components/ClosedTradeModal';
+import { useTradeHistory } from '@/hooks/useTradeHistory';
 import { useTheme } from '@/contexts/ThemeContext';
 import { database } from '@/firebaseConfig';
 import { ref, set, onValue, off } from 'firebase/database';
@@ -39,6 +41,12 @@ export default function PositionsScreen() {
   const [managementModalVisible, setManagementModalVisible] = useState(false);
   const [managementPosition, setManagementPosition] = useState<Position | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+
+  // Active vs closed-trade history view
+  const [viewMode, setViewMode] = useState<'active' | 'history'>('active');
+  const [selectedClosedTrade, setSelectedClosedTrade] = useState<ClosedTrade | null>(null);
+  const [closedModalVisible, setClosedModalVisible] = useState(false);
+  const { trades: closedTrades } = useTradeHistory();
 
   // Data fetching logic
   useEffect(() => {
@@ -164,6 +172,35 @@ export default function PositionsScreen() {
     }
   };
 
+  const handleHedgePosition = async () => {
+    if (!selectedAccount || !selectedPosition) return;
+
+    try {
+      const command = {
+        action: 'OPEN_POSITION',
+        symbol: selectedPosition.symbol,
+        type: selectedPosition.type === 0 ? 1 : 0, // opposite direction
+        lots: selectedPosition.lots,
+        sl: 0,
+        tp: 0,
+        status: 'PENDING',
+        timestamp: Math.floor(Date.now() / 1000)
+      };
+
+      const commandRef = ref(database, `commands/${selectedAccount}/latest`);
+      await set(commandRef, command);
+
+      Alert.alert(
+        "Success",
+        `Hedge sent: ${selectedPosition.type === 0 ? 'SELL' : 'BUY'} ${selectedPosition.lots} ${selectedPosition.symbol} at market.`
+      );
+      setModalVisible(false);
+    } catch (error) {
+      console.error('Hedge command error:', error);
+      Alert.alert("Error", `Failed to send hedge command: ${error}`);
+    }
+  };
+
   const handleCloseAll = () => {
     Alert.alert(
       "Close All Positions",
@@ -186,40 +223,6 @@ export default function PositionsScreen() {
               Alert.alert("Success", "Close all command sent.");
             } catch {
               Alert.alert("Error", "Failed to send close all command.");
-            }
-          }
-        }
-      ]
-    );
-  };
-
-  const handlePartialClose = async (position: Position, percentage: number) => {
-    if (!selectedAccount) {
-      Alert.alert("Error", "No account selected");
-      return;
-    }
-
-    Alert.alert(
-      "Confirm Partial Close",
-      `Close ${percentage}% of ${position.symbol} position?`,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Close",
-          style: "destructive",
-          onPress: async () => {
-            try {
-              const commandRef = ref(database, `commands/${selectedAccount}/latest`);
-              await set(commandRef, {
-                action: "PARTIAL_CLOSE",
-                ticket: position.ticket,
-                percentage: percentage,
-                status: 'PENDING',
-                timestamp: Math.floor(Date.now() / 1000)
-              });
-              Alert.alert("Success", `Partial close order sent for ${percentage}%`);
-            } catch {
-              Alert.alert("Error", "Failed to send partial close command");
             }
           }
         }
@@ -331,26 +334,6 @@ export default function PositionsScreen() {
       {/* Action Buttons */}
       <View style={styles.actionRow}>
         <TouchableOpacity
-          style={[styles.actionBtn, { backgroundColor: theme.colors.info + '20' }]}
-          onPress={(e) => {
-            e.stopPropagation();
-            handlePartialClose(item, 25);
-          }}
-        >
-          <Text style={[styles.actionBtnText, { color: theme.colors.info }]}>[25%]</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.actionBtn, { backgroundColor: theme.colors.info + '20' }]}
-          onPress={(e) => {
-            e.stopPropagation();
-            handlePartialClose(item, 50);
-          }}
-        >
-          <Text style={[styles.actionBtnText, { color: theme.colors.info }]}>[50%]</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
           style={[styles.iconBtn, { backgroundColor: theme.colors.input }]}
           onPress={(e) => {
             e.stopPropagation();
@@ -374,6 +357,54 @@ export default function PositionsScreen() {
             <IconSymbol name="xmark" size={20} color={theme.colors.error} />
           )}
         </TouchableOpacity>
+      </View>
+    </TouchableOpacity>
+  );
+
+  const renderHistoryItem = ({ item }: { item: ClosedTrade }) => (
+    <TouchableOpacity
+      style={[styles.positionCard, { backgroundColor: theme.colors.card }]}
+      onPress={() => { setSelectedClosedTrade(item); setClosedModalVisible(true); }}
+      activeOpacity={0.9}
+    >
+      <View style={styles.cardHeader}>
+        <View style={styles.symbolContainer}>
+          <View style={[styles.iconPlaceholder, { backgroundColor: theme.colors.input }]}>
+            <Text style={[styles.iconText, { color: theme.colors.textSecondary }]}>
+              {item.symbol.substring(0, 2)}
+            </Text>
+          </View>
+          <View>
+            <View style={styles.symbolRow}>
+              <Text style={[styles.symbolText, { color: theme.colors.text }]}>{item.symbol}</Text>
+              <View style={[
+                styles.typeBadge,
+                { backgroundColor: item.type === 0 ? theme.colors.buyBackground : theme.colors.sellBackground }
+              ]}>
+                <Text style={[styles.typeText, { color: item.type === 0 ? theme.colors.buy : theme.colors.sell }]}>
+                  {item.type === 0 ? 'BUY' : 'SELL'}
+                </Text>
+              </View>
+            </View>
+            <Text style={[styles.lotText, { color: theme.colors.textSecondary }]}>
+              {item.lots} Lots • {new Date(item.closeTime * 1000).toLocaleDateString()}
+            </Text>
+          </View>
+        </View>
+        <Text style={[styles.plText, { color: item.profit >= 0 ? theme.colors.profit : theme.colors.loss }]}>
+          {item.profit >= 0 ? '+' : ''}{formatCurrency(item.profit)}
+        </Text>
+      </View>
+
+      <View style={[styles.priceGrid, { borderTopColor: theme.colors.border, borderBottomWidth: 0 }]}>
+        <View style={styles.priceItem}>
+          <Text style={[styles.priceLabel, { color: theme.colors.textSecondary }]}>Entry</Text>
+          <Text style={[styles.priceValue, { color: theme.colors.text }]}>{item.entryPrice}</Text>
+        </View>
+        <View style={[styles.priceItem, { alignItems: 'flex-end' }]}>
+          <Text style={[styles.priceLabel, { color: theme.colors.textSecondary }]}>Exit</Text>
+          <Text style={[styles.priceValue, { color: theme.colors.text }]}>{item.exitPrice}</Text>
+        </View>
       </View>
     </TouchableOpacity>
   );
@@ -435,45 +466,68 @@ export default function PositionsScreen() {
         </View>
       </View>
 
-      {/* Active Positions Header */}
+      {/* Active / History toggle */}
       <View style={styles.sectionHeader}>
-        <Text style={[styles.sectionTitle, { color: theme.colors.textSecondary }]}>
-          ACTIVE POSITIONS ({data?.positions ? data.positions.length : 0})
-        </Text>
-        <View style={styles.filterContainer}>
-          <TouchableOpacity style={[styles.filterBtn, { backgroundColor: theme.colors.input }]}>
-            <Text style={[styles.filterText, { color: theme.colors.primary }]}>Filter</Text>
+        <View style={[styles.segment, { backgroundColor: theme.colors.input }]}>
+          <TouchableOpacity
+            style={[styles.segmentBtn, viewMode === 'active' && { backgroundColor: theme.colors.primary }]}
+            onPress={() => setViewMode('active')}
+          >
+            <Text style={[styles.segmentText, { color: viewMode === 'active' ? '#fff' : theme.colors.textSecondary }]}>
+              Active ({data?.positions ? data.positions.length : 0})
+            </Text>
           </TouchableOpacity>
-          <TouchableOpacity style={[styles.filterBtn, { backgroundColor: theme.colors.input }]}>
-            <Text style={[styles.filterText, { color: theme.colors.primary }]}>Sort</Text>
+          <TouchableOpacity
+            style={[styles.segmentBtn, viewMode === 'history' && { backgroundColor: theme.colors.primary }]}
+            onPress={() => setViewMode('history')}
+          >
+            <Text style={[styles.segmentText, { color: viewMode === 'history' ? '#fff' : theme.colors.textSecondary }]}>
+              History ({closedTrades.length})
+            </Text>
           </TouchableOpacity>
         </View>
       </View>
 
-      {loading && !refreshing ? (
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={theme.colors.primary} />
-          <Text style={[styles.loadingText, { color: theme.colors.textSecondary }]}>Syncing positions...</Text>
-        </View>
-      ) : error ? (
-        <View style={styles.centerContainer}>
-          <Text style={[styles.errorText, { color: theme.colors.error }]}>{error}</Text>
-        </View>
-      ) : !data?.positions || data.positions.length === 0 ? (
-        <View style={styles.centerContainer}>
-          <IconSymbol name="tray" size={48} color={theme.colors.textTertiary} />
-          <Text style={[styles.emptyText, { color: theme.colors.textSecondary }]}>No active positions</Text>
-        </View>
+      {viewMode === 'active' ? (
+        loading && !refreshing ? (
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator size="large" color={theme.colors.primary} />
+            <Text style={[styles.loadingText, { color: theme.colors.textSecondary }]}>Syncing positions...</Text>
+          </View>
+        ) : error ? (
+          <View style={styles.centerContainer}>
+            <Text style={[styles.errorText, { color: theme.colors.error }]}>{error}</Text>
+          </View>
+        ) : !data?.positions || data.positions.length === 0 ? (
+          <View style={styles.centerContainer}>
+            <IconSymbol name="tray" size={48} color={theme.colors.textTertiary} />
+            <Text style={[styles.emptyText, { color: theme.colors.textSecondary }]}>No active positions</Text>
+          </View>
+        ) : (
+          <FlatList
+            data={data.positions}
+            renderItem={renderItem}
+            keyExtractor={item => item.ticket.toString()}
+            contentContainerStyle={styles.listContent}
+            refreshControl={
+              <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.colors.primary} />
+            }
+          />
+        )
       ) : (
-        <FlatList
-          data={data.positions}
-          renderItem={renderItem}
-          keyExtractor={item => item.ticket.toString()}
-          contentContainerStyle={styles.listContent}
-          refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.colors.primary} />
-          }
-        />
+        closedTrades.length === 0 ? (
+          <View style={styles.centerContainer}>
+            <IconSymbol name="clock.arrow.circlepath" size={48} color={theme.colors.textTertiary} />
+            <Text style={[styles.emptyText, { color: theme.colors.textSecondary }]}>No closed trades in the last 30 days</Text>
+          </View>
+        ) : (
+          <FlatList
+            data={closedTrades}
+            renderItem={renderHistoryItem}
+            keyExtractor={item => String(item.ticket)}
+            contentContainerStyle={styles.listContent}
+          />
+        )
       )}
 
       {/* Modals */}
@@ -483,6 +537,7 @@ export default function PositionsScreen() {
         onClose={() => setModalVisible(false)}
         onScalePosition={handleScalePosition}
         onModifySLTP={handleModifySLTP}
+        onHedge={handleHedgePosition}
       />
 
       <PositionManagementModal
@@ -490,6 +545,12 @@ export default function PositionsScreen() {
         visible={managementModalVisible}
         onClose={() => setManagementModalVisible(false)}
         onUpdate={handleManagementUpdate}
+      />
+
+      <ClosedTradeModal
+        trade={selectedClosedTrade}
+        visible={closedModalVisible}
+        onClose={() => setClosedModalVisible(false)}
       />
     </SafeAreaView>
   );
@@ -576,6 +637,23 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
     letterSpacing: 0.5,
+  },
+  segment: {
+    flex: 1,
+    flexDirection: 'row',
+    borderRadius: 10,
+    padding: 4,
+    gap: 4,
+  },
+  segmentBtn: {
+    flex: 1,
+    paddingVertical: 8,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  segmentText: {
+    fontSize: 14,
+    fontWeight: '700',
   },
   filterContainer: {
     flexDirection: 'row',
