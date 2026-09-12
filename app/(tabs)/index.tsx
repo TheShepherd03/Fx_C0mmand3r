@@ -7,12 +7,22 @@ import { LineChart } from 'react-native-chart-kit';
 import { AccountSelector } from '@/components/AccountSelector';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { useTheme } from '@/contexts/ThemeContext';
+import { useAuth } from '@/contexts/AuthContext';
 import { IconSymbol } from '@/components/ui/icon-symbol';
+import { Alert, TouchableOpacity } from 'react-native';
 
 export default function DashboardScreen() {
   const { data, loading, error, refresh } = useAccountData();
   const { history } = useHistoryData();
   const { theme } = useTheme();
+  const { signOut } = useAuth();
+
+  const confirmSignOut = () => {
+    Alert.alert('Sign Out', 'Sign out of FX Commander?', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Sign Out', style: 'destructive', onPress: () => signOut() },
+    ]);
+  };
 
   const formatCurrency = (val: number | undefined) => {
     return val !== undefined ? `$${val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '$0.00';
@@ -74,6 +84,9 @@ export default function DashboardScreen() {
           </View>
 
           <ThemeToggle />
+          <TouchableOpacity onPress={confirmSignOut} style={{ padding: 6, marginLeft: 2 }}>
+            <IconSymbol name="rectangle.portrait.and.arrow.right" size={22} color={theme.colors.textSecondary} />
+          </TouchableOpacity>
         </View>
 
         {/* Account Selector */}

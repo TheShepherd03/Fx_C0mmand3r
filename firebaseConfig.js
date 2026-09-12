@@ -4,7 +4,6 @@ import {
   getAuth,
   initializeAuth,
   getReactNativePersistence,
-  signInAnonymously,
   onAuthStateChanged,
 } from 'firebase/auth';
 import ReactNativeAsyncStorage from '@react-native-async-storage/async-storage';
@@ -29,9 +28,9 @@ const app = initializeApp(firebaseConfig);
 const database = getDatabase(app);
 
 // --- Authentication --------------------------------------------------------
-// The Realtime Database security rules require an authenticated user
-// (auth != null). We sign in anonymously so the app can read account data and
-// send commands, while the database stays closed to unauthenticated callers.
+// The app signs in with a dedicated email/password account (entered on the
+// login screen and persisted). DB rules are locked to that user's UID, so the
+// public API key alone cannot read or write. See AuthContext for sign-in.
 let auth;
 if (Platform.OS === 'web') {
   auth = getAuth(app);
@@ -48,9 +47,9 @@ if (Platform.OS === 'web') {
   }
 }
 
-// Resolves once we have an authenticated (anonymous) user. Data listeners await
-// this before attaching so their first read isn't rejected as "permission
-// denied" during the brief window before sign-in completes.
+// Resolves once a user is authenticated (after login, or restored from a
+// persisted session). Data listeners await this before attaching so their first
+// read isn't rejected as "permission denied".
 const authReady = new Promise((resolve) => {
   const unsubscribe = onAuthStateChanged(auth, (user) => {
     if (user) {
@@ -58,12 +57,6 @@ const authReady = new Promise((resolve) => {
       resolve(user);
     }
   });
-});
-
-// Kick off sign-in. If a persisted session exists, onAuthStateChanged fires with
-// that user and this is effectively a no-op.
-signInAnonymously(auth).catch((error) => {
-  console.error('Firebase anonymous sign-in failed:', error);
 });
 
 export { app, database, auth, authReady };

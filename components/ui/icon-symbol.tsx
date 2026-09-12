@@ -57,6 +57,7 @@ const MAPPING: IconMapping = {
   'chart.bar.fill': 'bar-chart',
   'clock': 'schedule',
   'trash': 'delete',
+  'rectangle.portrait.and.arrow.right': 'logout',
 } as IconMapping;
 
 /**
