@@ -83,6 +83,8 @@ export interface Signal {
   status: 'pending' | 'executed' | 'rejected' | 'expired' | 'winning' | 'range';
   confidence: number; // 0-100 confidence level
   expiresAt?: number;    // unix seconds; discrete signals hide themselves after this
+  tickValue?: number;    // money per tickSize move per 1.0 lot (for risk-based sizing)
+  tickSize?: number;
   description?: string;
   riskRewardRatio?: number;
   timeframe?: string;

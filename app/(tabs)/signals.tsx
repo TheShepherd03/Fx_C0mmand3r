@@ -8,6 +8,8 @@ import { useAccount } from '@/contexts/AccountContext';
 import { useTheme } from '@/contexts/ThemeContext';
 import { Signal } from '@/constants/types';
 import { IconSymbol } from '@/components/ui/icon-symbol';
+import { ExecuteSignalModal } from '@/components/ExecuteSignalModal';
+import { useAccountData } from '@/hooks/useAccountData';
 
 const FILTERS = ['All Signals', 'Pending', 'Winning'];
 
@@ -21,6 +23,9 @@ export default function SignalsScreen() {
   const [activeSource, setActiveSource] = useState('All');
   const [searchQuery, setSearchQuery] = useState('');
   const [showSearch, setShowSearch] = useState(false);
+  const [execSignal, setExecSignal] = useState<Signal | null>(null);
+  const [execVisible, setExecVisible] = useState(false);
+  const { data: acctData } = useAccountData();
 
   useEffect(() => {
     if (!selectedAccount) {
@@ -61,49 +66,45 @@ export default function SignalsScreen() {
     return () => unsubscribe();
   }, [selectedAccount]);
 
-  const executeSignal = async (signal: Signal) => {
+  const executeSignal = (signal: Signal) => {
     if (!selectedAccount) {
       Alert.alert("Error", "No account selected.");
       return;
     }
+    setExecSignal(signal);
+    setExecVisible(true);
+  };
 
-    Alert.alert(
-      "Execute Trade",
-      `Open ${signal.symbol} ${signal.action}?`,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Execute",
-          onPress: async () => {
-            setExecutingIds(prev => new Set([...prev, signal.id]));
-            try {
-              const commandRef = ref(database, `commands/${selectedAccount}/latest`);
-              await set(commandRef, {
-                action: 'OPEN_POSITION',
-                symbol: signal.symbol,
-                type: signal.action === 'BUY' ? 0 : 1,
-                lots: signal.lots,
-                sl: signal.sl,
-                tp: signal.tp,
-                status: 'PENDING',
-                timestamp: Math.floor(Date.now() / 1000)
-              });
-
-              const signalRef = ref(database, `signals/${selectedAccount}/${signal.id}`);
-              await update(signalRef, { status: 'executed' });
-            } catch {
-              Alert.alert("Error", "Failed to execute signal.");
-            } finally {
-              setExecutingIds(prev => {
-                const newSet = new Set(prev);
-                newSet.delete(signal.id);
-                return newSet;
-              });
-            }
-          }
-        }
-      ]
-    );
+  // Called from the confirm sheet with the chosen lots/SL/TP
+  const doExecute = async (lots: number, sl: number, tp: number) => {
+    if (!selectedAccount || !execSignal) return;
+    const signal = execSignal;
+    setExecutingIds(prev => new Set([...prev, signal.id]));
+    try {
+      const commandRef = ref(database, `commands/${selectedAccount}/latest`);
+      await set(commandRef, {
+        action: 'OPEN_POSITION',
+        symbol: signal.symbol,
+        type: signal.action === 'BUY' ? 0 : 1,
+        lots,
+        sl,
+        tp,
+        status: 'PENDING',
+        timestamp: Math.floor(Date.now() / 1000)
+      });
+      const signalRef = ref(database, `signals/${selectedAccount}/${signal.id}`);
+      await update(signalRef, { status: 'executed' });
+      setExecVisible(false);
+      setExecSignal(null);
+    } catch {
+      Alert.alert("Error", "Failed to execute signal.");
+    } finally {
+      setExecutingIds(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(signal.id);
+        return newSet;
+      });
+    }
   };
 
   const rejectSignal = async (signal: Signal) => {
@@ -390,6 +391,15 @@ export default function SignalsScreen() {
             <ActivityIndicator style={{ marginTop: 40 }} size="large" color={theme.colors.primary} />
           )
         }
+      />
+
+      <ExecuteSignalModal
+        signal={execSignal}
+        balance={acctData?.balance}
+        visible={execVisible}
+        busy={execSignal ? executingIds.has(execSignal.id) : false}
+        onClose={() => setExecVisible(false)}
+        onConfirm={doExecute}
       />
     </SafeAreaView>
   );
