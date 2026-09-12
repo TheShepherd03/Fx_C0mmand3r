@@ -52,6 +52,9 @@ int OnInit()
 
 void OnTick()
 {
+   // Remove any of our signals whose SL/TP was hit or that expired
+   SignalLib_Prune();
+
    // Act once per new bar on the working timeframe
    datetime bt = iTime(_Symbol, Inp_TF, 0);
    if(bt == g_lastBar) return;

@@ -1083,30 +1083,70 @@ void ExecuteOpenPosition(string response)
       return;
    }
    
-   // Execute the trade
+   // --- Current market prices & broker constraints ---
+   double point   = SymbolInfoDouble(symbol, SYMBOL_POINT);
+   int    digits  = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+   long   stopsLv = (long)SymbolInfoInteger(symbol, SYMBOL_TRADE_STOPS_LEVEL);
+   double minDist = (stopsLv + 5) * point;   // min SL/TP distance from price (+small buffer)
+   double ask     = SymbolInfoDouble(symbol, SYMBOL_ASK);
+   double bid     = SymbolInfoDouble(symbol, SYMBOL_BID);
+
+   // --- 1) Re-validate the signal: has price already hit its SL/TP? ---
+   if(orderType == 0) // BUY, fills at ask
+   {
+      if(sl > 0 && ask <= sl) { Print("Signal no longer valid (price at/below SL). Skipping ", symbol); return; }
+      if(tp > 0 && ask >= tp) { Print("Signal no longer valid (price at/above TP). Skipping ", symbol); return; }
+   }
+   else // SELL, fills at bid
+   {
+      if(sl > 0 && bid >= sl) { Print("Signal no longer valid (price at/above SL). Skipping ", symbol); return; }
+      if(tp > 0 && bid <= tp) { Print("Signal no longer valid (price at/below TP). Skipping ", symbol); return; }
+   }
+
+   // --- 2) Clamp SL/TP to the broker's minimum distance from the CURRENT price ---
+   if(orderType == 0)
+   {
+      if(sl > 0 && sl > ask - minDist) sl = ask - minDist;
+      if(tp > 0 && tp < ask + minDist) tp = ask + minDist;
+   }
+   else
+   {
+      if(sl > 0 && sl < bid + minDist) sl = bid + minDist;
+      if(tp > 0 && tp > bid - minDist) tp = bid - minDist;
+   }
+   if(sl > 0) sl = NormalizeDouble(sl, digits);
+   if(tp > 0) tp = NormalizeDouble(tp, digits);
+
    Print("Executing trade: ", symbol, " ", (orderType == 0 ? "BUY" : "SELL"), " ", lots, " lots, SL=", sl, ", TP=", tp);
-   
-   ENUM_ORDER_TYPE mt5OrderType = (orderType == 0) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
-   
-   bool result = false;
-   if(orderType == 0) // BUY
+
+   // --- 3) Place at market; if the broker rejects the stops, open without them then attach ---
+   bool result = (orderType == 0) ? trade.Buy(lots, symbol, 0, sl, tp, "FX Commander")
+                                  : trade.Sell(lots, symbol, 0, sl, tp, "FX Commander");
+
+   if(!result && trade.ResultRetcode() == TRADE_RETCODE_INVALID_STOPS)
    {
-      result = trade.Buy(lots, symbol, 0, sl, tp, "FX Commander");
+      Print("Invalid stops rejected - retrying at market without preset stops, will attach after fill.");
+      result = (orderType == 0) ? trade.Buy(lots, symbol, 0, 0, 0, "FX Commander")
+                                : trade.Sell(lots, symbol, 0, 0, 0, "FX Commander");
+      if(result && (sl > 0 || tp > 0))
+      {
+         ulong tk = trade.ResultOrder();
+         if(PositionSelectByTicket(tk))
+         {
+            if(!trade.PositionModify(tk, sl, tp))
+               Print("Trade opened but could not attach SL/TP: ", trade.ResultRetcodeDescription());
+         }
+      }
    }
-   else // SELL
-   {
-      result = trade.Sell(lots, symbol, 0, sl, tp, "FX Commander");
-   }
-   
+
    if(result)
    {
       Print("Trade executed successfully. Ticket: ", trade.ResultOrder());
-      // Add the new position to management tracking
       AddPositionManagement(trade.ResultOrder());
    }
    else
    {
-      Print("Trade execution failed. Error: ", GetLastError(), " - ", trade.ResultRetcodeDescription());
+      Print("Trade execution failed. Retcode: ", trade.ResultRetcode(), " - ", trade.ResultRetcodeDescription());
    }
 }
 

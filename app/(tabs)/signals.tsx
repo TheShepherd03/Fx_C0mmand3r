@@ -137,8 +137,13 @@ export default function SignalsScreen() {
 
   const getFilteredSignals = () => {
     const now = Math.floor(Date.now() / 1000);
-    // Drop expired discrete signals (EMA/live signals carry no expiresAt)
-    let filtered = signals.filter(s => !(s.expiresAt && s.expiresAt < now));
+    // Always show only valid, actionable signals: drop expired, executed and rejected.
+    // (Signals whose SL/TP was hit are deleted server-side by the publishing EA.)
+    let filtered = signals.filter(s =>
+      !(s.expiresAt && s.expiresAt < now) &&
+      s.status !== 'executed' &&
+      s.status !== 'rejected'
+    );
 
     // Source filter
     if (activeSource !== 'All') {

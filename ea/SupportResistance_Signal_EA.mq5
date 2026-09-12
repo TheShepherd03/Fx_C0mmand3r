@@ -66,6 +66,9 @@ bool FindLevels(double price, double &resistance, double &support)
 
 void OnTick()
 {
+   // Remove any of our signals whose SL/TP was hit or that expired
+   SignalLib_Prune();
+
    datetime bt = iTime(_Symbol, Inp_TF, 0);
    if(bt == g_lastBar) return;
    g_lastBar = bt;
