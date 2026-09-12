@@ -15,6 +15,8 @@
 input group "=== Firebase Configuration ==="
 input string Inp_ProjectID = "c0mmand3r";                            // Firebase Project ID
 input string Inp_ApiKey    = "AIzaSyCA3LUdogLeo7wdHEfxfPQtG4EG2SqEFtg"; // Firebase Web API Key
+input string Inp_Email     = "";                                     // Firebase account email
+input string Inp_Password  = "";                                     // Firebase account password
 
 input group "=== Signal EMAs (period + timeframe per market cycle) ==="
 input int              Inp_P1  = 78;             // EMA 1 period (~1-Day)
@@ -94,8 +96,8 @@ string ExtractJsonValue(string json, string key)
 //+------------------------------------------------------------------+
 bool FirebaseSignIn()
 {
-   string url = "https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=" + Inp_ApiKey;
-   string body = "{\"returnSecureToken\":true}";
+   string url = "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=" + Inp_ApiKey;
+   string body = "{\"email\":\"" + Inp_Email + "\",\"password\":\"" + Inp_Password + "\",\"returnSecureToken\":true}";
    char postData[]; StringToCharArray(body, postData, 0, StringLen(body));
    char resultData[]; string resultHeaders;
    int res = WebRequest("POST", url, "Content-Type: application/json\r\n", 5000, postData, resultData, resultHeaders);

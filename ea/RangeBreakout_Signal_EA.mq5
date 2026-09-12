@@ -13,6 +13,8 @@
 input group "=== Firebase ==="
 input string Inp_ProjectID = "c0mmand3r";
 input string Inp_ApiKey    = "AIzaSyCA3LUdogLeo7wdHEfxfPQtG4EG2SqEFtg";
+input string Inp_Email     = "";       // Firebase account email
+input string Inp_Password  = "";       // Firebase account password
 
 input group "=== Range window (broker/server time) ==="
 input ENUM_TIMEFRAMES Inp_TF          = PERIOD_M5;   // Working timeframe
@@ -45,7 +47,7 @@ int MinutesOfDay(string hhmm)
 
 int OnInit()
 {
-   SignalLib_Init(Inp_ProjectID, Inp_ApiKey);
+   SignalLib_Init(Inp_ProjectID, Inp_ApiKey, Inp_Email, Inp_Password);
    Print("RangeBreakout signal EA on ", _Symbol);
    return INIT_SUCCEEDED;
 }

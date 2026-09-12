@@ -13,6 +13,8 @@
 input group "=== Firebase ==="
 input string Inp_ProjectID = "c0mmand3r";
 input string Inp_ApiKey    = "AIzaSyCA3LUdogLeo7wdHEfxfPQtG4EG2SqEFtg";
+input string Inp_Email     = "";       // Firebase account email
+input string Inp_Password  = "";       // Firebase account password
 
 input group "=== Detection ==="
 input ENUM_TIMEFRAMES Inp_TF        = PERIOD_M15;  // Working timeframe
@@ -34,7 +36,7 @@ long     g_barCounter = 0;
 
 int OnInit()
 {
-   SignalLib_Init(Inp_ProjectID, Inp_ApiKey);
+   SignalLib_Init(Inp_ProjectID, Inp_ApiKey, Inp_Email, Inp_Password);
    Print("Support/Resistance signal EA on ", _Symbol);
    return INIT_SUCCEEDED;
 }

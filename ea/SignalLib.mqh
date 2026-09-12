@@ -13,6 +13,8 @@
 // --- Config + auth state (set by SignalLib_Init) ---
 string   g_sl_projectId      = "";
 string   g_sl_apiKey         = "";
+string   g_sl_email          = "";
+string   g_sl_password       = "";
 string   g_sl_idToken        = "";
 string   g_sl_refreshToken   = "";
 datetime g_sl_tokenExpiry    = 0;
@@ -79,12 +81,12 @@ string SignalLib_AccountID()
 }
 
 //+------------------------------------------------------------------+
-//| Anonymous sign-in                                                 |
+//| Email/password sign-in                                            |
 //+------------------------------------------------------------------+
 bool SignalLib_SignIn()
 {
-   string url = "https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=" + g_sl_apiKey;
-   string body = "{\"returnSecureToken\":true}";
+   string url = "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=" + g_sl_apiKey;
+   string body = "{\"email\":\"" + g_sl_email + "\",\"password\":\"" + g_sl_password + "\",\"returnSecureToken\":true}";
    char post[]; StringToCharArray(body, post, 0, StringLen(body));
    char res[]; string hdr;
    int r = WebRequest("POST", url, "Content-Type: application/json\r\n", 5000, post, res, hdr);
@@ -137,13 +139,15 @@ bool SignalLib_EnsureAuth()
 //+------------------------------------------------------------------+
 //| Initialise: store config, build account id, sign in.              |
 //+------------------------------------------------------------------+
-bool SignalLib_Init(string projectId, string apiKey)
+bool SignalLib_Init(string projectId, string apiKey, string email, string password)
 {
    g_sl_projectId = projectId;
    g_sl_apiKey    = apiKey;
+   g_sl_email     = email;
+   g_sl_password  = password;
    g_sl_accountId = SignalLib_AccountID();
    bool ok = SignalLib_SignIn();
-   Print("SignalLib init for account ", g_sl_accountId, ok ? " (auth OK)" : " (auth pending)");
+   Print("SignalLib init for account ", g_sl_accountId, ok ? " (auth OK)" : " (auth FAILED - check email/password)");
    return ok;
 }
 

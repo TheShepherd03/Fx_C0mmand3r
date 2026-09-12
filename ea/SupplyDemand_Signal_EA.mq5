@@ -13,6 +13,8 @@
 input group "=== Firebase ==="
 input string Inp_ProjectID = "c0mmand3r";
 input string Inp_ApiKey    = "AIzaSyCA3LUdogLeo7wdHEfxfPQtG4EG2SqEFtg";
+input string Inp_Email     = "";       // Firebase account email
+input string Inp_Password  = "";       // Firebase account password
 
 input group "=== Detection ==="
 input ENUM_TIMEFRAMES Inp_TF        = PERIOD_M15;  // Working timeframe
@@ -37,7 +39,7 @@ int OnInit()
 {
    g_atr = iATR(_Symbol, Inp_TF, Inp_ATRPeriod);
    if(g_atr == INVALID_HANDLE) { Print("SD: ATR handle failed"); return INIT_FAILED; }
-   SignalLib_Init(Inp_ProjectID, Inp_ApiKey);
+   SignalLib_Init(Inp_ProjectID, Inp_ApiKey, Inp_Email, Inp_Password);
    Print("Supply/Demand signal EA on ", _Symbol);
    return INIT_SUCCEEDED;
 }
