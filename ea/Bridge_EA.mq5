@@ -1087,9 +1087,12 @@ void ExecuteOpenPosition(string response)
    double point   = SymbolInfoDouble(symbol, SYMBOL_POINT);
    int    digits  = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
    long   stopsLv = (long)SymbolInfoInteger(symbol, SYMBOL_TRADE_STOPS_LEVEL);
-   double minDist = (stopsLv + 5) * point;   // min SL/TP distance from price (+small buffer)
    double ask     = SymbolInfoDouble(symbol, SYMBOL_ASK);
    double bid     = SymbolInfoDouble(symbol, SYMBOL_BID);
+   double spread  = ask - bid;
+   // Min SL/TP distance: broker stops level, but at least a few spreads for fast
+   // synthetics, plus a small buffer.
+   double minDist = MathMax((double)stopsLv * point, spread * 3.0) + 10 * point;
 
    // --- 1) Re-validate the signal: has price already hit its SL/TP? ---
    if(orderType == 0) // BUY, fills at ask
@@ -1122,32 +1125,48 @@ void ExecuteOpenPosition(string response)
    // --- 3) Place at market; if the broker rejects the stops, open without them then attach ---
    bool result = (orderType == 0) ? trade.Buy(lots, symbol, 0, sl, tp, "FX Commander")
                                   : trade.Sell(lots, symbol, 0, sl, tp, "FX Commander");
+   bool stoplessRetry = false;
 
    if(!result && trade.ResultRetcode() == TRADE_RETCODE_INVALID_STOPS)
    {
-      Print("Invalid stops rejected - retrying at market without preset stops, will attach after fill.");
+      Print("Invalid stops rejected - opening at market, will attach SL/TP after fill.");
+      stoplessRetry = true;
       result = (orderType == 0) ? trade.Buy(lots, symbol, 0, 0, 0, "FX Commander")
                                 : trade.Sell(lots, symbol, 0, 0, 0, "FX Commander");
-      if(result && (sl > 0 || tp > 0))
-      {
-         ulong tk = trade.ResultOrder();
-         if(PositionSelectByTicket(tk))
-         {
-            if(!trade.PositionModify(tk, sl, tp))
-               Print("Trade opened but could not attach SL/TP: ", trade.ResultRetcodeDescription());
-         }
-      }
    }
 
-   if(result)
-   {
-      Print("Trade executed successfully. Ticket: ", trade.ResultOrder());
-      AddPositionManagement(trade.ResultOrder());
-   }
-   else
+   if(!result)
    {
       Print("Trade execution failed. Retcode: ", trade.ResultRetcode(), " - ", trade.ResultRetcodeDescription());
+      return;
    }
+
+   // Resolve the actual position ticket from the deal (ResultOrder is 0 for market fills)
+   ulong posTicket = 0;
+   ulong dealTicket = trade.ResultDeal();
+   if(dealTicket > 0 && HistoryDealSelect(dealTicket))
+      posTicket = (ulong)HistoryDealGetInteger(dealTicket, DEAL_POSITION_ID);
+   if(posTicket == 0 && PositionSelect(symbol))
+      posTicket = (ulong)PositionGetInteger(POSITION_TICKET);
+
+   Print("Trade executed successfully. Position ticket: ", posTicket);
+
+   // If opened stopless, attach SL/TP now, re-clamped to the live price
+   if(stoplessRetry && posTicket > 0 && (sl > 0 || tp > 0) && PositionSelectByTicket(posTicket))
+   {
+      double a2 = SymbolInfoDouble(symbol, SYMBOL_ASK), b2 = SymbolInfoDouble(symbol, SYMBOL_BID);
+      double sl2 = sl, tp2 = tp;
+      if(orderType == 0) { if(sl2 > 0 && sl2 > b2 - minDist) sl2 = b2 - minDist; if(tp2 > 0 && tp2 < a2 + minDist) tp2 = a2 + minDist; }
+      else               { if(sl2 > 0 && sl2 < a2 + minDist) sl2 = a2 + minDist; if(tp2 > 0 && tp2 > b2 - minDist) tp2 = b2 - minDist; }
+      if(sl2 > 0) sl2 = NormalizeDouble(sl2, digits);
+      if(tp2 > 0) tp2 = NormalizeDouble(tp2, digits);
+      if(trade.PositionModify(posTicket, sl2, tp2))
+         Print("SL/TP attached after fill: SL=", sl2, " TP=", tp2);
+      else
+         Print("Trade opened WITHOUT SL/TP (broker rejected attach): ", trade.ResultRetcodeDescription());
+   }
+
+   if(posTicket > 0) AddPositionManagement(posTicket);
 }
 
 //+------------------------------------------------------------------+
