@@ -82,37 +82,35 @@ void OnTick()
    double resistance, support;
    if(!FindLevels(c, resistance, support)) return;
 
-   // Rejection at resistance -> SELL (touched near level, closed back below)
-   if(Inp_AllowShort && resistance > 0 && (g_barCounter - g_lastShortIdx) >= Inp_CooldownBars)
+   // Evaluate both setups on this bar
+   bool wantShort = Inp_AllowShort && resistance > 0 && h >= resistance - prox && c < resistance;
+   bool wantLong  = Inp_AllowLong  && support   > 0 && l <= support   + prox && c > support;
+
+   // A single bar tagging both a support and a resistance is ambiguous chop - skip it
+   if(wantShort && wantLong) return;
+
+   if(wantShort && (g_barCounter - g_lastShortIdx) >= Inp_CooldownBars)
    {
-      if(h >= resistance - prox && c < resistance)
+      double entry = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+      double sl    = resistance + buffer;
+      double dist  = sl - entry;
+      if(dist > 0)
       {
-         double entry = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-         double sl    = resistance + buffer;
-         double dist  = sl - entry;
-         if(dist > 0)
-         {
-            double tp = entry - Inp_MinRR * dist;
-            PublishSignal(_Symbol, "SELL", entry, sl, tp, Inp_Lots, "Support/Resistance", 65, Inp_ExpiryMin*60);
-            g_lastShortIdx = (int)g_barCounter;
-         }
+         double tp = entry - Inp_MinRR * dist;
+         PublishSignal(_Symbol, "SELL", entry, sl, tp, Inp_Lots, "Support/Resistance", 65, Inp_ExpiryMin*60);
+         g_lastShortIdx = (int)g_barCounter;
       }
    }
-
-   // Bounce at support -> BUY (touched near level, closed back above)
-   if(Inp_AllowLong && support > 0 && (g_barCounter - g_lastLongIdx) >= Inp_CooldownBars)
+   else if(wantLong && (g_barCounter - g_lastLongIdx) >= Inp_CooldownBars)
    {
-      if(l <= support + prox && c > support)
+      double entry = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+      double sl    = support - buffer;
+      double dist  = entry - sl;
+      if(dist > 0)
       {
-         double entry = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-         double sl    = support - buffer;
-         double dist  = entry - sl;
-         if(dist > 0)
-         {
-            double tp = entry + Inp_MinRR * dist;
-            PublishSignal(_Symbol, "BUY", entry, sl, tp, Inp_Lots, "Support/Resistance", 65, Inp_ExpiryMin*60);
-            g_lastLongIdx = (int)g_barCounter;
-         }
+         double tp = entry + Inp_MinRR * dist;
+         PublishSignal(_Symbol, "BUY", entry, sl, tp, Inp_Lots, "Support/Resistance", 65, Inp_ExpiryMin*60);
+         g_lastLongIdx = (int)g_barCounter;
       }
    }
 }
