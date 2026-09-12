@@ -56,6 +56,8 @@ string         g_idToken = "";        // Current Firebase ID token used as ?auth
 string         g_refreshToken = "";   // Refresh token to renew the ID token
 datetime       g_tokenExpiry = 0;     // When g_idToken must be refreshed (with safety margin)
 datetime       g_lastAuthAttempt = 0; // Throttles (re)authentication retries
+string         g_authEmail = "";      // Resolved email (input or local file)
+string         g_authPassword = "";   // Resolved password (input or local file)
 
 // Position Management Variables
 bool           g_EAPaused = false;
@@ -226,7 +228,7 @@ string ExtractJsonValue(string json, string key)
 bool FirebaseSignIn()
 {
    string url = "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=" + Inp_ApiKey;
-   string body = "{\"email\":\"" + Inp_Email + "\",\"password\":\"" + Inp_Password + "\",\"returnSecureToken\":true}";
+   string body = "{\"email\":\"" + g_authEmail + "\",\"password\":\"" + g_authPassword + "\",\"returnSecureToken\":true}";
 
    char postData[];
    StringToCharArray(body, postData, 0, StringLen(body));
@@ -330,7 +332,26 @@ int OnInit()
    // Construct Base URL for Firebase Realtime Database
    g_firestoreBaseUrl = "https://" + Inp_ProjectID + "-default-rtdb.firebaseio.com";
 
-   // Authenticate with Firebase to obtain an ID token (Option C).
+   // Resolve credentials: EA inputs first, else a local file shared by all EAs
+   // (MQL5/Files/fxcommander_auth.txt: line 1 = email, line 2 = password).
+   g_authEmail    = Inp_Email;
+   g_authPassword = Inp_Password;
+   if(g_authEmail == "" || g_authPassword == "")
+   {
+      int hCred = FileOpen("fxcommander_auth.txt", FILE_READ|FILE_TXT|FILE_ANSI);
+      if(hCred != INVALID_HANDLE)
+      {
+         string e = FileReadString(hCred);
+         string p = FileReadString(hCred);
+         FileClose(hCred);
+         StringTrimLeft(e); StringTrimRight(e);
+         StringTrimLeft(p); StringTrimRight(p);
+         if(g_authEmail == "")    g_authEmail = e;
+         if(g_authPassword == "") g_authPassword = p;
+      }
+   }
+
+   // Authenticate with Firebase to obtain an ID token.
    // A valid token is required for every Realtime Database request.
    if(FirebaseSignIn())
       Print("Firebase authentication successful.");

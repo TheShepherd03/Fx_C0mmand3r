@@ -51,6 +51,8 @@ string g_refreshToken = "";
 datetime g_tokenExpiry = 0;
 datetime g_lastAuthAttempt = 0;
 string g_AccountID = "";
+string g_authEmail = "";
+string g_authPassword = "";
 
 datetime g_lastPush = 0;
 string   g_lastAction = "";       // last pushed action for this symbol
@@ -97,7 +99,7 @@ string ExtractJsonValue(string json, string key)
 bool FirebaseSignIn()
 {
    string url = "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=" + Inp_ApiKey;
-   string body = "{\"email\":\"" + Inp_Email + "\",\"password\":\"" + Inp_Password + "\",\"returnSecureToken\":true}";
+   string body = "{\"email\":\"" + g_authEmail + "\",\"password\":\"" + g_authPassword + "\",\"returnSecureToken\":true}";
    char postData[]; StringToCharArray(body, postData, 0, StringLen(body));
    char resultData[]; string resultHeaders;
    int res = WebRequest("POST", url, "Content-Type: application/json\r\n", 5000, postData, resultData, resultHeaders);
@@ -189,6 +191,25 @@ int OnInit()
    }
 
    g_AccountID = GenerateAccountID();
+
+   // Resolve credentials: inputs first, else local fxcommander_auth.txt
+   g_authEmail    = Inp_Email;
+   g_authPassword = Inp_Password;
+   if(g_authEmail == "" || g_authPassword == "")
+   {
+      int hCred = FileOpen("fxcommander_auth.txt", FILE_READ|FILE_TXT|FILE_ANSI);
+      if(hCred != INVALID_HANDLE)
+      {
+         string e = FileReadString(hCred);
+         string p = FileReadString(hCred);
+         FileClose(hCred);
+         StringTrimLeft(e); StringTrimRight(e);
+         StringTrimLeft(p); StringTrimRight(p);
+         if(g_authEmail == "")    g_authEmail = e;
+         if(g_authPassword == "") g_authPassword = p;
+      }
+   }
+
    FirebaseSignIn();
 
    EventSetTimer(Inp_PushInterval < 1 ? 1 : Inp_PushInterval);

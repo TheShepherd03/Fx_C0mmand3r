@@ -139,12 +139,31 @@ bool SignalLib_EnsureAuth()
 //+------------------------------------------------------------------+
 //| Initialise: store config, build account id, sign in.              |
 //+------------------------------------------------------------------+
+// Fall back to a local credentials file when the EA inputs are blank, so many
+// EAs can share one credential without per-EA setup. File: MQL5/Files/
+// fxcommander_auth.txt  (line 1 = email, line 2 = password). Kept local, never
+// committed to the repo.
+void SignalLib_LoadCredsIfBlank()
+{
+   if(g_sl_email != "" && g_sl_password != "") return;
+   int h = FileOpen("fxcommander_auth.txt", FILE_READ|FILE_TXT|FILE_ANSI);
+   if(h == INVALID_HANDLE) return;
+   string e = FileReadString(h);
+   string p = FileReadString(h);
+   FileClose(h);
+   StringTrimLeft(e); StringTrimRight(e);
+   StringTrimLeft(p); StringTrimRight(p);
+   if(g_sl_email == "")    g_sl_email = e;
+   if(g_sl_password == "") g_sl_password = p;
+}
+
 bool SignalLib_Init(string projectId, string apiKey, string email, string password)
 {
    g_sl_projectId = projectId;
    g_sl_apiKey    = apiKey;
    g_sl_email     = email;
    g_sl_password  = password;
+   SignalLib_LoadCredsIfBlank();
    g_sl_accountId = SignalLib_AccountID();
    bool ok = SignalLib_SignIn();
    Print("SignalLib init for account ", g_sl_accountId, ok ? " (auth OK)" : " (auth FAILED - check email/password)");
