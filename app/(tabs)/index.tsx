@@ -39,6 +39,18 @@ export default function DashboardScreen() {
   const plPercent = calculatePLPercent();
   const isProfit = totalPL >= 0;
 
+  // Current risk = money lost if every open position's SL is hit from the current
+  // price. Uses the EA-provided tick value/size (falls back to a rough heuristic).
+  const openPositions = data?.positions ?? [];
+  let unprotected = 0;
+  const totalRisk = openPositions.reduce((sum, p) => {
+    if (!p.sl || p.sl <= 0) { unprotected++; return sum; }
+    const perUnit = (p.tickValue && p.tickSize && p.tickSize > 0) ? (p.tickValue / p.tickSize) : 100000;
+    const dist = p.type === 0 ? (p.currentPrice - p.sl) : (p.sl - p.currentPrice);
+    return sum + dist * perUnit * p.lots;
+  }, 0);
+  const riskPercent = data?.balance ? (totalRisk / data.balance) * 100 : 0;
+
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.background }]}>
       <ScrollView
@@ -120,6 +132,28 @@ export default function DashboardScreen() {
                 <Text style={[styles.metricValue, { color: theme.colors.text }]}>
                   {data?.marginLevel ? `${Math.round(data.marginLevel).toLocaleString()}%` : '0%'}
                 </Text>
+              </View>
+            </View>
+
+            {/* Total Risk (sum of open positions' risk to their stop loss) */}
+            <View style={[styles.riskCard, { backgroundColor: theme.colors.card, borderColor: theme.colors.loss + '44' }]}>
+              <View>
+                <View style={styles.metricHeader}>
+                  <IconSymbol name="exclamationmark.shield.fill" size={16} color={theme.colors.loss} />
+                  <Text style={[styles.metricLabel, { color: theme.colors.textSecondary }]}>TOTAL RISK (to SL)</Text>
+                </View>
+                <Text style={[styles.riskValue, { color: totalRisk > 0 ? theme.colors.loss : theme.colors.profit }]}>
+                  {totalRisk >= 0 ? '-' : '+'}{formatCurrency(Math.abs(totalRisk))}
+                </Text>
+              </View>
+              <View style={{ alignItems: 'flex-end' }}>
+                <Text style={[styles.riskPct, { color: totalRisk > 0 ? theme.colors.loss : theme.colors.profit }]}>
+                  {Math.abs(riskPercent).toFixed(2)}%
+                </Text>
+                <Text style={[styles.riskSub, { color: theme.colors.textSecondary }]}>of balance</Text>
+                {unprotected > 0 && (
+                  <Text style={[styles.riskSub, { color: theme.colors.warning }]}>{unprotected} without SL</Text>
+                )}
               </View>
             </View>
 
@@ -303,6 +337,28 @@ const styles = StyleSheet.create({
   metricValue: {
     fontSize: 18,
     fontWeight: '700',
+  },
+  riskCard: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 16,
+    borderRadius: 16,
+    marginBottom: 16,
+    borderWidth: 1,
+  },
+  riskValue: {
+    fontSize: 22,
+    fontWeight: '800',
+    marginTop: 4,
+  },
+  riskPct: {
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  riskSub: {
+    fontSize: 11,
+    marginTop: 1,
   },
   chartCard: {
     padding: 16,
