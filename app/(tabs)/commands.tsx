@@ -14,7 +14,7 @@ export default function CommandsScreen() {
   const { selectedAccount } = useAccount();
   const { data } = useAccountData();
   const { theme } = useTheme();
-  const { statusBarEnabled, toggleStatusBar } = usePrivacy();
+  const { statusBarEnabled, toggleStatusBar, notificationsEnabled, toggleNotifications } = usePrivacy();
 
   // State
   const [autoTrading, setAutoTrading] = useState(true);
@@ -203,6 +203,18 @@ export default function CommandsScreen() {
         {/* Display preferences */}
         <View style={styles.section}>
           <Text style={[styles.sectionLabel, { color: theme.colors.textSecondary }]}>DISPLAY</Text>
+          <View style={[styles.settingRow, { backgroundColor: theme.colors.card, marginBottom: 10 }]}>
+            <View style={{ flex: 1, paddingRight: 12 }}>
+              <Text style={[styles.settingTitle, { color: theme.colors.text }]}>Signal notifications</Text>
+              <Text style={[styles.settingDesc, { color: theme.colors.textSecondary }]}>Push alerts when a new signal appears</Text>
+            </View>
+            <Switch
+              value={notificationsEnabled}
+              onValueChange={toggleNotifications}
+              trackColor={{ false: theme.colors.input, true: theme.colors.primary }}
+              thumbColor="#FFF"
+            />
+          </View>
           <View style={[styles.settingRow, { backgroundColor: theme.colors.card }]}>
             <View style={{ flex: 1, paddingRight: 12 }}>
               <Text style={[styles.settingTitle, { color: theme.colors.text }]}>Live P/L + Risk bar</Text>

@@ -3,6 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const STORAGE_KEY = 'fxc_hide_balances';
 const STATUSBAR_KEY = 'fxc_show_statusbar';
+const NOTIFS_KEY = 'fxc_notifications';
 const MASK = '••••••';
 
 interface PrivacyContextType {
@@ -13,6 +14,9 @@ interface PrivacyContextType {
   /** Whether the always-visible P/L + Risk strip is shown (default on). */
   statusBarEnabled: boolean;
   toggleStatusBar: () => void;
+  /** Whether new-signal push notifications are enabled (default on). */
+  notificationsEnabled: boolean;
+  toggleNotifications: () => void;
 }
 
 const PrivacyContext = createContext<PrivacyContextType>({
@@ -21,11 +25,14 @@ const PrivacyContext = createContext<PrivacyContextType>({
   mask: (v) => String(v),
   statusBarEnabled: true,
   toggleStatusBar: () => {},
+  notificationsEnabled: true,
+  toggleNotifications: () => {},
 });
 
 export function PrivacyProvider({ children }: { children: ReactNode }) {
   const [hidden, setHidden] = useState(false);
   const [statusBarEnabled, setStatusBarEnabled] = useState(true);
+  const [notificationsEnabled, setNotificationsEnabled] = useState(true);
 
   // Restore saved preferences so they persist across launches.
   useEffect(() => {
@@ -34,6 +41,9 @@ export function PrivacyProvider({ children }: { children: ReactNode }) {
       .catch(() => {});
     AsyncStorage.getItem(STATUSBAR_KEY)
       .then((v) => { if (v === '0') setStatusBarEnabled(false); })
+      .catch(() => {});
+    AsyncStorage.getItem(NOTIFS_KEY)
+      .then((v) => { if (v === '0') setNotificationsEnabled(false); })
       .catch(() => {});
   }, []);
 
@@ -53,10 +63,18 @@ export function PrivacyProvider({ children }: { children: ReactNode }) {
     });
   };
 
+  const toggleNotifications = () => {
+    setNotificationsEnabled((prev) => {
+      const next = !prev;
+      AsyncStorage.setItem(NOTIFS_KEY, next ? '1' : '0').catch(() => {});
+      return next;
+    });
+  };
+
   const mask = (value: string | number) => (hidden ? MASK : String(value));
 
   return (
-    <PrivacyContext.Provider value={{ hidden, toggle, mask, statusBarEnabled, toggleStatusBar }}>
+    <PrivacyContext.Provider value={{ hidden, toggle, mask, statusBarEnabled, toggleStatusBar, notificationsEnabled, toggleNotifications }}>
       {children}
     </PrivacyContext.Provider>
   );

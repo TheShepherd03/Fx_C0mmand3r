@@ -4,10 +4,11 @@ import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import Constants from 'expo-constants';
 import { router } from 'expo-router';
-import { ref, set } from 'firebase/database';
+import { ref, set, remove } from 'firebase/database';
 import { database } from '@/firebaseConfig';
 import { useAccount } from '@/contexts/AccountContext';
 import { useAuth } from '@/contexts/AuthContext';
+import { usePrivacy } from '@/contexts/PrivacyContext';
 
 // Show the banner + play sound even when the app is foregrounded.
 Notifications.setNotificationHandler({
@@ -56,6 +57,7 @@ async function registerForPush(): Promise<string | null> {
 export function usePushNotifications() {
   const { selectedAccount } = useAccount();
   const { user } = useAuth();
+  const { notificationsEnabled } = usePrivacy();
   const [pushToken, setPushToken] = useState<string | null>(null);
 
   // Fetch the token once the user is signed in.
@@ -68,12 +70,19 @@ export function usePushNotifications() {
     return () => { mounted = false; };
   }, [user]);
 
-  // Save the token under the selected account so the EA on that account can read it.
+  // Register the token under the selected account when notifications are ON, and
+  // remove it when OFF — the EA sends to whatever tokens are present, so removing
+  // it cleanly stops pushes without any EA change.
   useEffect(() => {
     if (!user || !selectedAccount || !pushToken) return;
     const key = pushToken.replace(/[.#$/\[\]]/g, '_');
-    set(ref(database, `pushTokens/${selectedAccount}/${key}`), pushToken).catch(() => {});
-  }, [user, selectedAccount, pushToken]);
+    const tokenRef = ref(database, `pushTokens/${selectedAccount}/${key}`);
+    if (notificationsEnabled) {
+      set(tokenRef, pushToken).catch(() => {});
+    } else {
+      remove(tokenRef).catch(() => {});
+    }
+  }, [user, selectedAccount, pushToken, notificationsEnabled]);
 
   // Tapping a signal notification opens the Signals tab.
   useEffect(() => {
