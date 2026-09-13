@@ -25,16 +25,34 @@ export default function SignalsScreen() {
   const [showSearch, setShowSearch] = useState(false);
   const [execSignal, setExecSignal] = useState<Signal | null>(null);
   const [execVisible, setExecVisible] = useState(false);
-  const [lotOverrides, setLotOverrides] = useState<Record<string, number>>({});
+  // Raw text the user has dialled in per signal (via -/+ or manual typing).
+  const [lotOverrides, setLotOverrides] = useState<Record<string, string>>({});
   const { data: acctData } = useAccountData();
 
   const LOT_STEP = 0.01;
   const LOT_MIN = 0.01;
-  // Current lot for a signal: the user's inline override, else the signal's own lot, else a default.
-  const lotFor = (item: Signal) => lotOverrides[item.id] ?? (item.lots > 0 ? item.lots : 0.05);
+  // Numeric lot for a signal: parsed override if valid, else the signal's own lot, else default.
+  const lotFor = (item: Signal) => {
+    const raw = lotOverrides[item.id];
+    const parsed = raw !== undefined ? parseFloat(raw) : NaN;
+    if (!isNaN(parsed) && parsed > 0) return parsed;
+    return item.lots > 0 ? item.lots : 0.05;
+  };
+  // Text shown in the editable field (raw override if present, else the default).
+  const lotText = (item: Signal) =>
+    lotOverrides[item.id] ?? (item.lots > 0 ? item.lots : 0.05).toFixed(2);
+  // Manual edit: keep only digits + a single decimal point so the field stays valid.
+  const setLotText = (item: Signal, text: string) => {
+    const clean = text.replace(/[^0-9.]/g, '').replace(/(\..*)\./g, '$1');
+    setLotOverrides(prev => ({ ...prev, [item.id]: clean }));
+  };
   const adjustLot = (item: Signal, delta: number) => {
     const next = Math.max(LOT_MIN, Math.round((lotFor(item) + delta) * 100) / 100);
-    setLotOverrides(prev => ({ ...prev, [item.id]: next }));
+    setLotOverrides(prev => ({ ...prev, [item.id]: next.toFixed(2) }));
+  };
+  // On blur, normalise an empty/invalid field back to a clean value.
+  const normalizeLot = (item: Signal) => {
+    setLotOverrides(prev => ({ ...prev, [item.id]: lotFor(item).toFixed(2) }));
   };
 
   useEffect(() => {
@@ -254,7 +272,17 @@ export default function SignalsScreen() {
                 >
                   <Text style={[styles.lotStepSign, { color: theme.colors.text }]}>−</Text>
                 </TouchableOpacity>
-                <Text style={[styles.lotStepValue, { color: theme.colors.text }]}>{lotFor(item).toFixed(2)}</Text>
+                <TextInput
+                  style={[styles.lotStepValue, styles.lotStepInput, { color: theme.colors.text, borderColor: theme.colors.border }]}
+                  value={lotText(item)}
+                  onChangeText={(t) => setLotText(item, t)}
+                  onBlur={() => normalizeLot(item)}
+                  keyboardType="numeric"
+                  selectTextOnFocus
+                  editable={!isProcessing}
+                  placeholder="0.00"
+                  placeholderTextColor={theme.colors.textTertiary}
+                />
                 <TouchableOpacity
                   style={[styles.lotStepBtn, { borderColor: theme.colors.border }]}
                   onPress={() => adjustLot(item, LOT_STEP)}
@@ -626,6 +654,14 @@ const styles = StyleSheet.create({
     minWidth: 46,
     textAlign: 'center',
     fontFamily: 'monospace',
+  },
+  lotStepInput: {
+    borderWidth: 1,
+    borderRadius: 6,
+    paddingVertical: 4,
+    paddingHorizontal: 6,
+    marginHorizontal: 2,
+    minWidth: 64,
   },
   grid: {
     flexDirection: 'row',
