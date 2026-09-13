@@ -360,7 +360,7 @@ export default function SignalsScreen() {
             </TouchableOpacity>
           </View>
         </View>
-        <Text style={[styles.headerSubtitle, { color: theme.colors.textSecondary }]}>Live Feed • FX Commander</Text>
+        <Text style={[styles.headerSubtitle, { color: theme.colors.textSecondary }]}>Live Feed • Command0r</Text>
 
         {showSearch && (
           <TextInput

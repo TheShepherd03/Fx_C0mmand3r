@@ -40,7 +40,7 @@ export function LoginScreen() {
           <View style={[styles.logo, { backgroundColor: theme.colors.primary }]}>
             <IconSymbol name="bolt.fill" size={32} color="#fff" />
           </View>
-          <Text style={[styles.title, { color: theme.colors.text }]}>FX Commander</Text>
+          <Text style={[styles.title, { color: theme.colors.text }]}>Command0r</Text>
           <Text style={[styles.subtitle, { color: theme.colors.textSecondary }]}>Sign in to your account</Text>
 
           <View style={styles.form}>

@@ -21,7 +21,7 @@ export default function DashboardScreen() {
   const { signOut } = useAuth();
 
   const confirmSignOut = () => {
-    Alert.alert('Sign Out', 'Sign out of FX Commander?', [
+    Alert.alert('Sign Out', 'Sign out of Command0r?', [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Sign Out', style: 'destructive', onPress: () => signOut() },
     ]);
@@ -71,7 +71,7 @@ export default function DashboardScreen() {
         {/* Header */}
         <View style={styles.header}>
           <View>
-            <Text style={[styles.appName, { color: theme.colors.text }]}>FX Commander</Text>
+            <Text style={[styles.appName, { color: theme.colors.text }]}>Command0r</Text>
           </View>
 
           <View style={[styles.statusPill, { backgroundColor: isOnline() ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)' }]}>
