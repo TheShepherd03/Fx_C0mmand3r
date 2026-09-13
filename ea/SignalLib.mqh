@@ -38,9 +38,11 @@ struct SL_Tracked
    string   key;        // Firebase push key
    string   symbol;
    string   action;     // BUY / SELL
+   double   entry;      // published entry price (for winning/pending status)
    double   sl;
    double   tp;
    datetime expiresAt;
+   string   status;     // last status pushed to Firebase (pending / winning)
 };
 SL_Tracked g_sl_tracked[];
 
@@ -304,27 +306,35 @@ bool PublishSignal(string symbol, string action, double entry, double sl, double
    string body = o.ToString();
    delete o;
 
-   // POST appends a uniquely-keyed child so multiple discrete signals accumulate
+   // Deterministic key per (source, symbol): a restart overwrites the SAME node
+   // instead of orphaning it, and there's at most one live signal per symbol per
+   // source (no unbounded accumulation). PATCH-upsert on the parent keeps the URL
+   // short (the ~905-char token would push a per-key PUT URL past MQL's ~1024 limit).
+   string key = source + "_" + symbol;
+   StringReplace(key, ".", "_"); StringReplace(key, "$", "_"); StringReplace(key, "#", "_");
+   StringReplace(key, "[", "_"); StringReplace(key, "]", "_"); StringReplace(key, "/", "_");
+   StringReplace(key, " ", "_");
+
    string url = "https://" + g_sl_projectId + "-default-rtdb.firebaseio.com/signals/" + g_sl_accountId + ".json?auth=" + g_sl_idToken;
-   char post[]; StringToCharArray(body, post, 0, StringLen(body));
+   string patchBody = "{\"" + key + "\":" + body + "}";
+   char post[]; StringToCharArray(patchBody, post, 0, StringLen(patchBody));
    char res[]; string hdr;
-   int r = WebRequest("POST", url, "Content-Type: application/json\r\n", 5000, post, res, hdr);
+   int r = WebRequest("PATCH", url, "Content-Type: application/json\r\n", 5000, post, res, hdr);
    if(r == 200)
    {
-      // Track the signal so we can delete it when SL/TP is hit or it expires.
-      // Firebase POST returns {"name":"-Nxxxx"} - that child key is the id.
-      string key = SignalLib_ExtractJson(CharArrayToString(res), "name");
-      if(key != "")
-      {
-         int n = ArraySize(g_sl_tracked);
-         ArrayResize(g_sl_tracked, n + 1);
-         g_sl_tracked[n].key       = key;
-         g_sl_tracked[n].symbol    = symbol;
-         g_sl_tracked[n].action    = action;
-         g_sl_tracked[n].sl        = sl;
-         g_sl_tracked[n].tp        = tp;
-         g_sl_tracked[n].expiresAt = (datetime)(TimeCurrent() + expirySeconds);
-      }
+      // Track by key (upsert): update in place if we already track this key.
+      int idx = -1;
+      for(int t = 0; t < ArraySize(g_sl_tracked); t++)
+         if(g_sl_tracked[t].key == key) { idx = t; break; }
+      if(idx < 0) { idx = ArraySize(g_sl_tracked); ArrayResize(g_sl_tracked, idx + 1); }
+      g_sl_tracked[idx].key       = key;
+      g_sl_tracked[idx].symbol    = symbol;
+      g_sl_tracked[idx].action    = action;
+      g_sl_tracked[idx].entry     = entry;
+      g_sl_tracked[idx].sl        = sl;
+      g_sl_tracked[idx].tp        = tp;
+      g_sl_tracked[idx].expiresAt = (datetime)(TimeCurrent() + expirySeconds);
+      g_sl_tracked[idx].status    = "pending";
       Print("Signal published: ", source, " ", symbol, " ", action, " @", entry);
    }
    else Print("Signal publish FAILED HTTP ", r, " ", CharArrayToString(res));
@@ -332,13 +342,32 @@ bool PublishSignal(string symbol, string action, double entry, double sl, double
 }
 
 //+------------------------------------------------------------------+
-//| Delete a signal node by key                                       |
+//| Delete a signal node by key. Uses PATCH-null on the PARENT node    |
+//| (short URL) instead of DELETE on the per-key URL: with the ~905-   |
+//| char auth token in the query, the per-key URL exceeds MQL5's       |
+//| ~1024-char WebRequest limit and silently fails, so hit/expired     |
+//| signals would never actually be removed from the feed.             |
 //+------------------------------------------------------------------+
 void SignalLib_Delete(string key)
 {
-   string url = "https://" + g_sl_projectId + "-default-rtdb.firebaseio.com/signals/" + g_sl_accountId + "/" + key + ".json?auth=" + g_sl_idToken;
-   char post[]; char res[]; string hdr;
-   WebRequest("DELETE", url, "", 5000, post, res, hdr);
+   string url = "https://" + g_sl_projectId + "-default-rtdb.firebaseio.com/signals/" + g_sl_accountId + ".json?auth=" + g_sl_idToken;
+   string body = "{\"" + key + "\":null}";
+   char post[]; StringToCharArray(body, post, 0, StringLen(body));
+   char res[]; string hdr;
+   WebRequest("PATCH", url, "Content-Type: application/json\r\n", 5000, post, res, hdr);
+}
+
+//+------------------------------------------------------------------+
+//| Update just the status field of a published signal (winning /     |
+//| pending), via a multi-path PATCH on the parent (short URL).        |
+//+------------------------------------------------------------------+
+void SignalLib_SetStatus(string key, string status)
+{
+   string url = "https://" + g_sl_projectId + "-default-rtdb.firebaseio.com/signals/" + g_sl_accountId + ".json?auth=" + g_sl_idToken;
+   string body = "{\"" + key + "/status\":\"" + status + "\"}";
+   char post[]; StringToCharArray(body, post, 0, StringLen(body));
+   char res[]; string hdr;
+   WebRequest("PATCH", url, "Content-Type: application/json\r\n", 5000, post, res, hdr);
 }
 
 //+------------------------------------------------------------------+
@@ -382,6 +411,23 @@ void SignalLib_Prune()
          SignalLib_Delete(g_sl_tracked[i].key);
          for(int j = i; j < ArraySize(g_sl_tracked) - 1; j++) g_sl_tracked[j] = g_sl_tracked[j+1];
          ArrayResize(g_sl_tracked, ArraySize(g_sl_tracked) - 1);
+         continue;
+      }
+
+      // Still valid: keep the live status accurate. "winning" once price has
+      // moved in the signal's favour from entry, else "pending".
+      double px = (g_sl_tracked[i].action == "BUY") ? bid : ask;
+      double e  = g_sl_tracked[i].entry;
+      string want = "pending";
+      if(e > 0)
+      {
+         if(g_sl_tracked[i].action == "BUY"  && px > e) want = "winning";
+         if(g_sl_tracked[i].action == "SELL" && px < e) want = "winning";
+      }
+      if(want != g_sl_tracked[i].status)
+      {
+         SignalLib_SetStatus(g_sl_tracked[i].key, want);
+         g_sl_tracked[i].status = want;
       }
    }
 }
