@@ -428,9 +428,8 @@ export default function PositionsScreen() {
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.background }]}>
-      {/* Header */}
-      <View style={styles.header}>
-        <Text style={[styles.headerTitle, { color: theme.colors.text }]}>Portfolio</Text>
+      {/* Header (title removed — bottom nav shows the screen). Close All stays right. */}
+      <View style={[styles.header, { justifyContent: 'flex-end' }]}>
         {data?.positions && data.positions.length > 0 && (
           <TouchableOpacity
             style={[styles.closeAllBtn, { backgroundColor: theme.colors.error + '20', borderColor: theme.colors.error }]}

@@ -68,12 +68,8 @@ export default function DashboardScreen() {
         }
       >
 
-        {/* Header */}
+        {/* Header — title removed (bottom nav shows the screen); keep status + controls */}
         <View style={styles.header}>
-          <View>
-            <Text style={[styles.appName, { color: theme.colors.text }]}>Command0r</Text>
-          </View>
-
           <View style={[styles.statusPill, { backgroundColor: isOnline() ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)' }]}>
             <View style={[styles.statusDot, { backgroundColor: isOnline() ? theme.colors.success : theme.colors.error }]} />
             <Text style={[styles.statusText, { color: isOnline() ? theme.colors.success : theme.colors.error }]}>
@@ -81,13 +77,15 @@ export default function DashboardScreen() {
             </Text>
           </View>
 
-          <TouchableOpacity onPress={togglePrivacy} style={{ padding: 6 }}>
-            <IconSymbol name={balancesHidden ? 'eye.slash.fill' : 'eye.fill'} size={22} color={theme.colors.textSecondary} />
-          </TouchableOpacity>
-          <ThemeToggle />
-          <TouchableOpacity onPress={confirmSignOut} style={{ padding: 6, marginLeft: 2 }}>
-            <IconSymbol name="rectangle.portrait.and.arrow.right" size={22} color={theme.colors.textSecondary} />
-          </TouchableOpacity>
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <TouchableOpacity onPress={togglePrivacy} style={{ padding: 6 }}>
+              <IconSymbol name={balancesHidden ? 'eye.slash.fill' : 'eye.fill'} size={22} color={theme.colors.textSecondary} />
+            </TouchableOpacity>
+            <ThemeToggle />
+            <TouchableOpacity onPress={confirmSignOut} style={{ padding: 6, marginLeft: 2 }}>
+              <IconSymbol name="rectangle.portrait.and.arrow.right" size={22} color={theme.colors.textSecondary} />
+            </TouchableOpacity>
+          </View>
         </View>
 
         {/* Account Selector */}

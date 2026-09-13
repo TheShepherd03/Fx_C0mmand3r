@@ -350,17 +350,15 @@ export default function SignalsScreen() {
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.background }]}>
-      {/* Header */}
+      {/* Header — title/subtitle removed (bottom nav shows the screen); keep search */}
       <View style={[styles.header, { backgroundColor: theme.colors.background }]}>
-        <View style={styles.headerTop}>
-          <Text style={[styles.headerTitle, { color: theme.colors.text }]}>Market Signals</Text>
+        <View style={[styles.headerTop, { justifyContent: 'flex-end' }]}>
           <View style={styles.headerIcons}>
             <TouchableOpacity onPress={() => setShowSearch(!showSearch)} style={[styles.iconBtn, { backgroundColor: theme.colors.card }]}>
               <IconSymbol name="magnifyingglass" size={20} color={theme.colors.text} />
             </TouchableOpacity>
           </View>
         </View>
-        <Text style={[styles.headerSubtitle, { color: theme.colors.textSecondary }]}>Live Feed • Command0r</Text>
 
         {showSearch && (
           <TextInput

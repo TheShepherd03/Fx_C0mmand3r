@@ -138,10 +138,7 @@ export default function CommandsScreen() {
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.background }]}>
-      <View style={[styles.header, { backgroundColor: theme.colors.background }]}>
-        <Text style={[styles.headerTitle, { color: theme.colors.text }]}>Trade Control</Text>
-      </View>
-
+      {/* Title removed — bottom nav shows the screen. */}
       <ScrollView contentContainerStyle={styles.scrollContent}>
         <AccountSelector />
 
