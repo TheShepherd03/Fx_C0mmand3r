@@ -1,0 +1,30 @@
+{
+  "project_info": {
+    "project_number": "936874561230",
+    "firebase_url": "https://c0mmand3r-default-rtdb.firebaseio.com",
+    "project_id": "c0mmand3r",
+    "storage_bucket": "c0mmand3r.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:936874561230:android:4b9cdeeb9c9a3b0d1d0a9f",
+        "android_client_info": {
+          "package_name": "com.fxcommander.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBYK7zI7MX0nZNViOSCnCBZ1X3kXM8d8-s"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
