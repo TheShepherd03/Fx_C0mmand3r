@@ -336,9 +336,6 @@ export default function SignalsScreen() {
             <TouchableOpacity onPress={() => setShowSearch(!showSearch)} style={[styles.iconBtn, { backgroundColor: theme.colors.card }]}>
               <IconSymbol name="magnifyingglass" size={20} color={theme.colors.text} />
             </TouchableOpacity>
-            <TouchableOpacity style={[styles.iconBtn, { backgroundColor: theme.colors.card }]}>
-              <IconSymbol name="slider.horizontal.3" size={20} color={theme.colors.text} />
-            </TouchableOpacity>
           </View>
         </View>
         <Text style={[styles.headerSubtitle, { color: theme.colors.textSecondary }]}>Live Feed • FX Commander</Text>

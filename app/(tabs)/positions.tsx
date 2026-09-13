@@ -145,11 +145,14 @@ export default function PositionsScreen() {
     setModalVisible(true);
   };
 
-  const handleScalePosition = async (scaleFactor: number) => {
+  // Receives the exact lot size to open (a multiplier button or the manual input
+  // computes it in the modal), clamped to a valid 0.01 step.
+  const handleScalePosition = async (lots: number) => {
     if (!selectedAccount || !selectedPosition) return;
+    const scaledLots = Math.max(0.01, Math.round(lots * 100) / 100);
+    if (!scaledLots || isNaN(scaledLots)) { Alert.alert("Error", "Enter a valid lot size."); return; }
 
     try {
-      const scaledLots = selectedPosition.lots * scaleFactor;
       const command = {
         action: 'OPEN_POSITION',
         symbol: selectedPosition.symbol,

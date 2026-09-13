@@ -137,13 +137,7 @@ export default function CommandsScreen() {
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.background }]}>
       <View style={[styles.header, { backgroundColor: theme.colors.background }]}>
-        <TouchableOpacity style={styles.backButton}>
-          <IconSymbol name="arrow.left" size={24} color={theme.colors.text} />
-        </TouchableOpacity>
         <Text style={[styles.headerTitle, { color: theme.colors.text }]}>Trade Control</Text>
-        <TouchableOpacity>
-          <IconSymbol name="clock.arrow.circlepath" size={24} color={theme.colors.textSecondary} />
-        </TouchableOpacity>
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollContent}>

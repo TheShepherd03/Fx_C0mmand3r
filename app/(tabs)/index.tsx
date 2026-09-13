@@ -8,12 +8,15 @@ import { AccountSelector } from '@/components/AccountSelector';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useAuth } from '@/contexts/AuthContext';
+import { usePrivacy } from '@/contexts/PrivacyContext';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { Alert, TouchableOpacity } from 'react-native';
+import { totalRisk as computeTotalRisk } from '@/utils/positionMath';
 
 export default function DashboardScreen() {
   const { data, loading, error, refresh } = useAccountData();
   const { history } = useHistoryData();
+  const { hidden: balancesHidden, toggle: togglePrivacy, mask } = usePrivacy();
   const { theme } = useTheme();
   const { signOut } = useAuth();
 
@@ -49,17 +52,12 @@ export default function DashboardScreen() {
   const plPercent = calculatePLPercent();
   const isProfit = totalPL >= 0;
 
-  // Current risk = money lost if every open position's SL is hit from the current
-  // price. Uses the EA-provided tick value/size (falls back to a rough heuristic).
+  // Risk = money lost if every open position's SL is hit, measured from ENTRY,
+  // so this total always equals the sum of the per-position SL risks shown in
+  // the position detail sheet (shared calc in utils/positionMath).
   const openPositions = data?.positions ?? [];
-  let unprotected = 0;
-  const totalRisk = openPositions.reduce((sum, p) => {
-    if (!p.sl || p.sl <= 0) { unprotected++; return sum; }
-    const perUnit = (p.tickValue && p.tickSize && p.tickSize > 0) ? (p.tickValue / p.tickSize) : 100000;
-    const dist = p.type === 0 ? (p.currentPrice - p.sl) : (p.sl - p.currentPrice);
-    return sum + dist * perUnit * p.lots;
-  }, 0);
-  const riskPercent = data?.balance ? (totalRisk / data.balance) * 100 : 0;
+  const { risk: totalRiskAmount, unprotected } = computeTotalRisk(openPositions);
+  const riskPercent = data?.balance ? (totalRiskAmount / data.balance) * 100 : 0;
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.background }]}>
@@ -83,6 +81,9 @@ export default function DashboardScreen() {
             </Text>
           </View>
 
+          <TouchableOpacity onPress={togglePrivacy} style={{ padding: 6 }}>
+            <IconSymbol name={balancesHidden ? 'eye.slash.fill' : 'eye.fill'} size={22} color={theme.colors.textSecondary} />
+          </TouchableOpacity>
           <ThemeToggle />
           <TouchableOpacity onPress={confirmSignOut} style={{ padding: 6, marginLeft: 2 }}>
             <IconSymbol name="rectangle.portrait.and.arrow.right" size={22} color={theme.colors.textSecondary} />
@@ -102,11 +103,11 @@ export default function DashboardScreen() {
             <View style={[styles.mainCard, { backgroundColor: theme.colors.card }]}>
               <Text style={[styles.mainCardTitle, { color: theme.colors.textSecondary }]}>TOTAL FLOATING P/L</Text>
               <Text style={[styles.mainCardValue, { color: isProfit ? theme.colors.profit : theme.colors.loss }]}>
-                {totalPL >= 0 ? '+' : ''}{formatCurrency(totalPL)}
+                {balancesHidden ? mask('') : `${totalPL >= 0 ? '+' : ''}${formatCurrency(totalPL)}`}
               </Text>
               <View style={[styles.percentBadge, { backgroundColor: isProfit ? theme.colors.buyBackground : theme.colors.sellBackground }]}>
                 <Text style={[styles.percentText, { color: isProfit ? theme.colors.profit : theme.colors.loss }]}>
-                  {totalPL >= 0 ? '+' : ''}{plPercent.toFixed(2)}% Today
+                  {balancesHidden ? mask('') : `${totalPL >= 0 ? '+' : ''}${plPercent.toFixed(2)}% Today`}
                 </Text>
               </View>
             </View>
@@ -118,7 +119,7 @@ export default function DashboardScreen() {
                   <IconSymbol name="building.columns.fill" size={16} color={theme.colors.primary} />
                   <Text style={[styles.metricLabel, { color: theme.colors.textSecondary }]}>BALANCE</Text>
                 </View>
-                <Text style={[styles.metricValue, { color: theme.colors.text }]}>{formatCurrency(data?.balance)}</Text>
+                <Text style={[styles.metricValue, { color: theme.colors.text }]}>{mask(formatCurrency(data?.balance))}</Text>
               </View>
 
               <View style={[styles.metricCard, { backgroundColor: theme.colors.card }]}>
@@ -126,7 +127,7 @@ export default function DashboardScreen() {
                   <IconSymbol name="chart.line.uptrend.xyaxis" size={16} color={theme.colors.success} />
                   <Text style={[styles.metricLabel, { color: theme.colors.textSecondary }]}>EQUITY</Text>
                 </View>
-                <Text style={[styles.metricValue, { color: theme.colors.text }]}>{formatCurrency(data?.equity)}</Text>
+                <Text style={[styles.metricValue, { color: theme.colors.text }]}>{mask(formatCurrency(data?.equity))}</Text>
               </View>
 
               <View style={[styles.metricCard, { backgroundColor: theme.colors.card }]}>
@@ -134,7 +135,7 @@ export default function DashboardScreen() {
                   <IconSymbol name="lock.open.fill" size={16} color={theme.colors.textSecondary} />
                   <Text style={[styles.metricLabel, { color: theme.colors.textSecondary }]}>FREE MARGIN</Text>
                 </View>
-                <Text style={[styles.metricValue, { color: theme.colors.text }]}>{formatCurrency(data?.freeMargin)}</Text>
+                <Text style={[styles.metricValue, { color: theme.colors.text }]}>{mask(formatCurrency(data?.freeMargin))}</Text>
               </View>
 
               <View style={[styles.metricCard, { backgroundColor: theme.colors.card }]}>
@@ -155,13 +156,13 @@ export default function DashboardScreen() {
                   <IconSymbol name="exclamationmark.shield.fill" size={16} color={theme.colors.loss} />
                   <Text style={[styles.metricLabel, { color: theme.colors.textSecondary }]}>TOTAL RISK (to SL)</Text>
                 </View>
-                <Text style={[styles.riskValue, { color: totalRisk > 0 ? theme.colors.loss : theme.colors.profit }]}>
-                  {totalRisk >= 0 ? '-' : '+'}{formatCurrency(Math.abs(totalRisk))}
+                <Text style={[styles.riskValue, { color: totalRiskAmount > 0 ? theme.colors.loss : theme.colors.profit }]}>
+                  {balancesHidden ? mask('') : `${totalRiskAmount >= 0 ? '-' : '+'}${formatCurrency(Math.abs(totalRiskAmount))}`}
                 </Text>
               </View>
               <View style={{ alignItems: 'flex-end' }}>
-                <Text style={[styles.riskPct, { color: totalRisk > 0 ? theme.colors.loss : theme.colors.profit }]}>
-                  {Math.abs(riskPercent).toFixed(2)}%
+                <Text style={[styles.riskPct, { color: totalRiskAmount > 0 ? theme.colors.loss : theme.colors.profit }]}>
+                  {balancesHidden ? mask('') : `${Math.abs(riskPercent).toFixed(2)}%`}
                 </Text>
                 <Text style={[styles.riskSub, { color: theme.colors.textSecondary }]}>of balance</Text>
                 {unprotected > 0 && (

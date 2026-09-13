@@ -1,8 +1,11 @@
 import { Tabs } from 'expo-router';
 import React from 'react';
+import { View } from 'react-native';
+import { BottomTabBar } from '@react-navigation/bottom-tabs';
 
 import { HapticTab } from '@/components/haptic-tab';
 import { IconSymbol } from '@/components/ui/icon-symbol';
+import { LiveStatusBar } from '@/components/LiveStatusBar';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 
@@ -15,7 +18,14 @@ export default function TabLayout() {
         tabBarActiveTintColor: Colors[colorScheme ?? 'light'].tint,
         headerShown: false,
         tabBarButton: HapticTab,
-      }}>
+      }}
+      // Live P/L + Risk strip sits directly above the tab bar on every screen.
+      tabBar={(props) => (
+        <View>
+          <LiveStatusBar />
+          <BottomTabBar {...props} />
+        </View>
+      )}>
       <Tabs.Screen
         name="index"
         options={{

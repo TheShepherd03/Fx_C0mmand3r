@@ -13,12 +13,13 @@ import {
 import { Position } from '@/constants/types';
 import { useTheme } from '@/contexts/ThemeContext';
 import { IconSymbol } from '@/components/ui/icon-symbol';
+import { riskToSL } from '@/utils/positionMath';
 
 interface PositionDetailsModalProps {
   position: Position | null;
   visible: boolean;
   onClose: () => void;
-  onScalePosition?: (scaleFactor: number) => void;
+  onScalePosition?: (lots: number) => void;   // exact lot size to open at market
   onModifySLTP?: (ticket: number, sl: number, tp: number) => void;
   onHedge?: () => void;
 }
@@ -28,6 +29,7 @@ export function PositionDetailsModal({ position, visible, onClose, onScalePositi
   const [editableSL, setEditableSL] = useState('');
   const [editableTP, setEditableTP] = useState('');
   const [hasChanges, setHasChanges] = useState(false);
+  const [scaleLots, setScaleLots] = useState('');
 
   // Initialize editable values when position changes
   useEffect(() => {
@@ -175,11 +177,9 @@ export function PositionDetailsModal({ position, visible, onClose, onScalePositi
     }
   };
 
-  // Calculate position risk (distance from entry to SL)
-  const calculateRisk = () => {
-    if (position.sl === 0) return 0;
-    return moneyForPriceDiff(position.openPrice - position.sl);
-  };
+  // Calculate position risk (distance from entry to SL). Uses the shared helper
+  // so the dashboard Total Risk card always equals the sum of these values.
+  const calculateRisk = () => riskToSL(position);
 
   // Calculate potential profit (distance from entry to TP)
   const calculatePotentialProfit = () => {
@@ -399,7 +399,7 @@ export function PositionDetailsModal({ position, visible, onClose, onScalePositi
                             `Open ${scaledLots} lot ${position.symbol} ${position.type === 0 ? 'BUY' : 'SELL'} position (${factor}x scale)?`,
                             [
                               { text: "Cancel", style: "cancel" },
-                              { text: "Confirm", onPress: () => onScalePosition(factor) }
+                              { text: "Confirm", onPress: () => onScalePosition(position.lots * factor) }
                             ]
                           );
                         }}
@@ -413,6 +413,36 @@ export function PositionDetailsModal({ position, visible, onClose, onScalePositi
                       </TouchableOpacity>
                     );
                   })}
+                </View>
+
+                {/* Manual lot amount */}
+                <View style={styles.scaleManualRow}>
+                  <TextInput
+                    style={[styles.scaleManualInput, { backgroundColor: theme.colors.input, color: theme.colors.text, borderColor: theme.colors.border }]}
+                    value={scaleLots}
+                    onChangeText={setScaleLots}
+                    keyboardType="numeric"
+                    placeholder="Custom lots"
+                    placeholderTextColor={theme.colors.textTertiary}
+                  />
+                  <TouchableOpacity
+                    style={[styles.scaleManualBtn, { backgroundColor: theme.colors.primary, opacity: (parseFloat(scaleLots) > 0) ? 1 : 0.5 }]}
+                    disabled={!(parseFloat(scaleLots) > 0)}
+                    onPress={() => {
+                      const lots = Math.round(parseFloat(scaleLots) * 100) / 100;
+                      if (!(lots > 0)) return;
+                      Alert.alert(
+                        "Scale Position",
+                        `Open ${lots.toFixed(2)} lot ${position.symbol} ${position.type === 0 ? 'BUY' : 'SELL'} position at market price?`,
+                        [
+                          { text: "Cancel", style: "cancel" },
+                          { text: "Confirm", onPress: () => { onScalePosition(lots); setScaleLots(''); } }
+                        ]
+                      );
+                    }}
+                  >
+                    <Text style={styles.scaleManualBtnText}>Open</Text>
+                  </TouchableOpacity>
                 </View>
               </View>
             )}
@@ -732,6 +762,33 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#E3F2FD',
     marginTop: 2,
+  },
+  scaleManualRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 12,
+  },
+  scaleManualInput: {
+    flex: 1,
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    fontSize: 16,
+    fontFamily: 'monospace',
+  },
+  scaleManualBtn: {
+    paddingHorizontal: 22,
+    paddingVertical: 13,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  scaleManualBtnText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '700',
   },
   hedgeButton: {
     flexDirection: 'row',

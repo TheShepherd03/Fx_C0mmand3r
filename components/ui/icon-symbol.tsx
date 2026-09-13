@@ -58,6 +58,8 @@ const MAPPING: IconMapping = {
   'clock': 'schedule',
   'trash': 'delete',
   'rectangle.portrait.and.arrow.right': 'logout',
+  'eye.fill': 'visibility',
+  'eye.slash.fill': 'visibility-off',
 } as IconMapping;
 
 /**

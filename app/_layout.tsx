@@ -9,6 +9,7 @@ import { useColorScheme } from '@/hooks/use-color-scheme';
 import { AccountProvider } from '@/contexts/AccountContext';
 import { ThemeProvider } from '@/contexts/ThemeContext';
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
+import { PrivacyProvider } from '@/contexts/PrivacyContext';
 import { LoginScreen } from '@/components/LoginScreen';
 
 export const unstable_settings = {
@@ -38,13 +39,15 @@ export default function RootLayout() {
       <AuthProvider>
         <AuthGate>
           <AccountProvider>
-            <NavigationThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-              <Stack>
-                <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-                <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
-              </Stack>
-              <StatusBar style="auto" />
-            </NavigationThemeProvider>
+            <PrivacyProvider>
+              <NavigationThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+                <Stack>
+                  <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+                  <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
+                </Stack>
+                <StatusBar style="auto" />
+              </NavigationThemeProvider>
+            </PrivacyProvider>
           </AccountProvider>
         </AuthGate>
       </AuthProvider>
