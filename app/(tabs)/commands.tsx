@@ -8,6 +8,7 @@ import { useAccount } from '@/contexts/AccountContext';
 import { useAccountData } from '@/hooks/useAccountData';
 import { useTheme } from '@/contexts/ThemeContext';
 import { usePrivacy } from '@/contexts/PrivacyContext';
+import * as Haptics from 'expo-haptics';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 
 export default function CommandsScreen() {
@@ -108,6 +109,7 @@ export default function CommandsScreen() {
           text: "EXECUTE",
           style: "destructive",
           onPress: () => {
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
             sendCommand('KILL_SWITCH');
             setAutoTrading(false);
           }

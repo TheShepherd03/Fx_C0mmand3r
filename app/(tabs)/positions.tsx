@@ -10,6 +10,7 @@ import {
   Alert,
   RefreshControl
 } from 'react-native';
+import * as Haptics from 'expo-haptics';
 import { Position, ClosedTrade } from '@/constants/types';
 import { useAccount } from '@/contexts/AccountContext';
 import { PositionDetailsModal } from '@/components/PositionDetailsModal';
@@ -113,6 +114,7 @@ export default function PositionsScreen() {
           text: "Close",
           style: "destructive",
           onPress: async () => {
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
             setClosingIds(prev => new Set(prev).add(ticket));
             try {
               if (!selectedAccount) {
@@ -268,7 +270,21 @@ export default function PositionsScreen() {
     return `$${val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   };
 
-  const renderItem = ({ item }: { item: Position }) => (
+  // Price with thousands separators, preserving the instrument's decimals.
+  const fmtPrice = (val: number | undefined) =>
+    (val ?? 0).toLocaleString('en-US', { maximumFractionDigits: 5 });
+
+  const renderItem = ({ item }: { item: Position }) => {
+    // How far price has travelled from SL (0%) to TP (100%).
+    const hasSLTP = item.sl > 0 && item.tp > 0;
+    let tpPct: number | null = null;
+    if (hasSLTP) {
+      const raw = item.type === 0
+        ? (item.currentPrice - item.sl) / (item.tp - item.sl)
+        : (item.sl - item.currentPrice) / (item.sl - item.tp);
+      tpPct = Math.max(0, Math.min(1, raw)) * 100;
+    }
+    return (
     <TouchableOpacity
       style={[styles.positionCard, { backgroundColor: theme.colors.card }]}
       onPress={() => handlePositionTap(item)}
@@ -326,13 +342,27 @@ export default function PositionsScreen() {
       <View style={[styles.priceGrid, { borderTopColor: theme.colors.border, borderBottomColor: theme.colors.border }]}>
         <View style={styles.priceItem}>
           <Text style={[styles.priceLabel, { color: theme.colors.textSecondary }]}>Entry</Text>
-          <Text style={[styles.priceValue, { color: theme.colors.text }]}>{item.openPrice}</Text>
+          <Text style={[styles.priceValue, { color: theme.colors.text }]}>{fmtPrice(item.openPrice)}</Text>
         </View>
         <View style={[styles.priceItem, { alignItems: 'flex-end' }]}>
           <Text style={[styles.priceLabel, { color: theme.colors.textSecondary }]}>Current</Text>
-          <Text style={[styles.priceValue, { color: theme.colors.text }]}>{item.currentPrice}</Text>
+          <Text style={[styles.priceValue, { color: theme.colors.text }]}>{fmtPrice(item.currentPrice)}</Text>
         </View>
       </View>
+
+      {/* SL/TP progress: where price sits between stop and target */}
+      {hasSLTP && tpPct !== null && (
+        <View style={styles.sltpWrap}>
+          <View style={styles.sltpLabels}>
+            <Text style={[styles.sltpLabel, { color: theme.colors.loss }]}>SL {fmtPrice(item.sl)}</Text>
+            <Text style={[styles.sltpLabel, { color: theme.colors.profit }]}>TP {fmtPrice(item.tp)}</Text>
+          </View>
+          <View style={[styles.sltpTrack, { backgroundColor: theme.colors.input }]}>
+            <View style={[styles.sltpFill, { width: `${tpPct}%`, backgroundColor: item.profit >= 0 ? theme.colors.profit : theme.colors.loss }]} />
+            <View style={[styles.sltpMarker, { left: `${tpPct}%`, backgroundColor: theme.colors.text }]} />
+          </View>
+        </View>
+      )}
 
       {/* Action Buttons */}
       <View style={styles.actionRow}>
@@ -362,7 +392,8 @@ export default function PositionsScreen() {
         </TouchableOpacity>
       </View>
     </TouchableOpacity>
-  );
+    );
+  };
 
   const renderHistoryItem = ({ item }: { item: ClosedTrade }) => (
     <TouchableOpacity
@@ -766,6 +797,40 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     fontFamily: 'monospace', // Ensure numbers align nicely
+  },
+  sltpWrap: {
+    marginTop: 12,
+  },
+  sltpLabels: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 6,
+  },
+  sltpLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    fontFamily: 'monospace',
+  },
+  sltpTrack: {
+    height: 6,
+    borderRadius: 3,
+    position: 'relative',
+    justifyContent: 'center',
+  },
+  sltpFill: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+    borderRadius: 3,
+    opacity: 0.5,
+  },
+  sltpMarker: {
+    position: 'absolute',
+    width: 3,
+    height: 12,
+    borderRadius: 2,
+    marginLeft: -1.5,
   },
   actionRow: {
     flexDirection: 'row',

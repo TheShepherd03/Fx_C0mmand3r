@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { StyleSheet, View, Text, FlatList, TouchableOpacity, Alert, ActivityIndicator, TextInput } from 'react-native';
+import { StyleSheet, View, Text, FlatList, TouchableOpacity, Alert, ActivityIndicator, TextInput, RefreshControl } from 'react-native';
+import * as Haptics from 'expo-haptics';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { database } from '@/firebaseConfig';
 import { ref, query, orderByChild, limitToLast, onValue, set } from 'firebase/database';
@@ -23,6 +24,8 @@ export default function SignalsScreen() {
   const [activeSource, setActiveSource] = useState('All');
   const [searchQuery, setSearchQuery] = useState('');
   const [showSearch, setShowSearch] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const onRefresh = () => { setRefreshing(true); setTimeout(() => setRefreshing(false), 800); };
   const [execSignal, setExecSignal] = useState<Signal | null>(null);
   const [execVisible, setExecVisible] = useState(false);
   // Raw text the user has dialled in per signal (via -/+ or manual typing).
@@ -103,6 +106,7 @@ export default function SignalsScreen() {
       Alert.alert("Error", "No account selected.");
       return;
     }
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
     setExecSignal(signal);
     setExecVisible(true);
   };
@@ -125,6 +129,7 @@ export default function SignalsScreen() {
         timestamp: Math.floor(Date.now() / 1000)
       });
       setActedIds(prev => new Set(prev).add(signal.id));   // hide locally; EA owns the node
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
       setExecVisible(false);
       setExecSignal(null);
     } catch {
@@ -431,6 +436,9 @@ export default function SignalsScreen() {
         renderItem={renderItem}
         keyExtractor={item => item.id}
         contentContainerStyle={styles.listContent}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.colors.primary} />
+        }
         ListEmptyComponent={
           !loading ? (
             <View style={styles.emptyContainer}>
