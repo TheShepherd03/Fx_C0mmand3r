@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { StyleSheet, View, Text, FlatList, TouchableOpacity, Alert, ActivityIndicator, TextInput } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { database } from '@/firebaseConfig';
-import { ref, query, orderByChild, limitToLast, onValue, set, update } from 'firebase/database';
+import { ref, query, orderByChild, limitToLast, onValue, set } from 'firebase/database';
 import { AccountSelector } from '@/components/AccountSelector';
 import { useAccount } from '@/contexts/AccountContext';
 import { useTheme } from '@/contexts/ThemeContext';
@@ -27,6 +27,10 @@ export default function SignalsScreen() {
   const [execVisible, setExecVisible] = useState(false);
   // Raw text the user has dialled in per signal (via -/+ or manual typing).
   const [lotOverrides, setLotOverrides] = useState<Record<string, string>>({});
+  // Signals executed/rejected this session — filtered locally, NOT written to the
+  // shared node, because the EA owns each signal's status (winning/pending) and
+  // would overwrite an 'executed'/'rejected' flag, making the signal reappear.
+  const [actedIds, setActedIds] = useState<Set<string>>(new Set());
   const { data: acctData } = useAccountData();
 
   const LOT_STEP = 0.01;
@@ -120,8 +124,7 @@ export default function SignalsScreen() {
         status: 'PENDING',
         timestamp: Math.floor(Date.now() / 1000)
       });
-      const signalRef = ref(database, `signals/${selectedAccount}/${signal.id}`);
-      await update(signalRef, { status: 'executed' });
+      setActedIds(prev => new Set(prev).add(signal.id));   // hide locally; EA owns the node
       setExecVisible(false);
       setExecSignal(null);
     } catch {
@@ -135,20 +138,10 @@ export default function SignalsScreen() {
     }
   };
 
-  const rejectSignal = async (signal: Signal) => {
-    setExecutingIds(prev => new Set([...prev, signal.id]));
-    try {
-      const signalRef = ref(database, `signals/${selectedAccount}/${signal.id}`);
-      await update(signalRef, { status: 'rejected' });
-    } catch {
-      Alert.alert("Error", "Failed to reject signal");
-    } finally {
-      setExecutingIds(prev => {
-        const newSet = new Set(prev);
-        newSet.delete(signal.id);
-        return newSet;
-      });
-    }
+  const rejectSignal = (signal: Signal) => {
+    // Hide locally for this session; the EA owns the node and prunes it on
+    // SL/TP hit or expiry. (No shared-node write — see actedIds.)
+    setActedIds(prev => new Set(prev).add(signal.id));
   };
 
   const formatTime = (timestamp: number) => {
@@ -166,10 +159,11 @@ export default function SignalsScreen() {
 
   const getFilteredSignals = () => {
     const now = Math.floor(Date.now() / 1000);
-    // Always show only valid, actionable signals: drop expired, executed and rejected.
-    // (Signals whose SL/TP was hit are deleted server-side by the publishing EA.)
+    // Show only valid, actionable signals: drop expired, ones acted on this session,
+    // and any legacy executed/rejected. (SL/TP-hit signals are pruned by the EA.)
     let filtered = signals.filter(s =>
       !(s.expiresAt && s.expiresAt < now) &&
+      !actedIds.has(s.id) &&
       s.status !== 'executed' &&
       s.status !== 'rejected'
     );
