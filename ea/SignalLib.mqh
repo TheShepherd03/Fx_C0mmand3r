@@ -26,6 +26,12 @@ string   g_sl_accountId      = "";
 // local file, so ~20 EAs don't each sign in (which trips TOO_MANY_ATTEMPTS).
 #define FXC_TOKEN_FILE "fxcommander_token.txt"
 
+// Temporary bypass: if this flag file exists in MQL5/Files, EAs skip Firebase
+// auth entirely and publish unauthenticated (requires open rules on signals/).
+// Reversible with no recompile: delete the file + re-lock rules + restart.
+#define FXC_NOAUTH_FILE "fxcommander_noauth.txt"
+bool     g_sl_noAuth         = false;
+
 // --- Live signals this EA has published (for SL/TP-hit + expiry pruning) ---
 struct SL_Tracked
 {
@@ -179,6 +185,7 @@ void SignalLib_WriteSharedToken()
 //+------------------------------------------------------------------+
 bool SignalLib_EnsureAuth()
 {
+   if(g_sl_noAuth) return true;   // bypass: publish unauthenticated (open rules)
    datetime now = TimeCurrent();
    if(g_sl_idToken != "" && now < g_sl_tokenExpiry) return true;
    // Another EA may already have a fresh token cached in the shared file.
@@ -240,8 +247,15 @@ bool SignalLib_Init(string projectId, string apiKey, string email, string passwo
    g_sl_apiKey    = apiKey;
    g_sl_email     = email;
    g_sl_password  = password;
-   SignalLib_LoadCredsIfBlank();
    g_sl_accountId = SignalLib_AccountID();
+   // Temporary unauthenticated bypass (flag file present) — skip all auth.
+   if(FileIsExist(FXC_NOAUTH_FILE))
+   {
+      g_sl_noAuth = true;
+      Print("SignalLib init for account ", g_sl_accountId, " (NO-AUTH bypass: publishing unauthenticated)");
+      return true;
+   }
+   SignalLib_LoadCredsIfBlank();
    // Don't sign in inline (that makes ~20 EAs storm Firebase on load). Prefer a
    // token already cached in the shared file; otherwise stagger the first real
    // sign-in by a random 0-120s so instances don't all hit the network at once.

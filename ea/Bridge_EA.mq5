@@ -59,6 +59,12 @@ datetime       g_lastAuthAttempt = 0; // Throttles (re)authentication retries
 string         g_authEmail = "";      // Resolved email (input or local file)
 string         g_authPassword = "";   // Resolved password (input or local file)
 
+// Temporary bypass: if this flag file exists in MQL5/Files, skip Firebase auth
+// and use the DB unauthenticated (requires open rules). Reversible with no
+// recompile: delete the file + re-lock the rules + restart.
+#define FXC_NOAUTH_FILE "fxcommander_noauth.txt"
+bool           g_noAuth = false;
+
 // Position Management Variables
 bool           g_EAPaused = false;
 bool           g_EASchedulePaused = false;
@@ -304,6 +310,7 @@ bool FirebaseRefreshToken()
 //+------------------------------------------------------------------+
 bool EnsureValidToken()
 {
+   if(g_noAuth) return true;   // bypass: use the DB unauthenticated (open rules)
    if(g_idToken != "" && TimeCurrent() < g_tokenExpiry)
       return true;
 
@@ -332,33 +339,54 @@ int OnInit()
    // Construct Base URL for Firebase Realtime Database
    g_firestoreBaseUrl = "https://" + Inp_ProjectID + "-default-rtdb.firebaseio.com";
 
-   // Resolve credentials: EA inputs first, else a local file shared by all EAs
-   // (MQL5/Files/fxcommander_auth.txt: line 1 = email, line 2 = password).
-   g_authEmail    = Inp_Email;
-   g_authPassword = Inp_Password;
-   if(g_authEmail == "" || g_authPassword == "")
+   // Temporary unauthenticated bypass (flag file present) — skip all auth.
+   if(FileIsExist(FXC_NOAUTH_FILE))
    {
-      int hCred = FileOpen("fxcommander_auth.txt", FILE_READ|FILE_TXT|FILE_ANSI);
-      if(hCred != INVALID_HANDLE)
-      {
-         string e = FileReadString(hCred);
-         string p = FileReadString(hCred);
-         FileClose(hCred);
-         StringTrimLeft(e); StringTrimRight(e);
-         StringTrimLeft(p); StringTrimRight(p);
-         if(g_authEmail == "")    g_authEmail = e;
-         if(g_authPassword == "") g_authPassword = p;
-      }
+      g_noAuth = true;
+      Print("TradeCommand Bridge: NO-AUTH bypass active - using the DB unauthenticated (open rules).");
    }
-
-   // Authenticate with Firebase to obtain an ID token.
-   // A valid token is required for every Realtime Database request.
-   if(FirebaseSignIn())
-      Print("Firebase authentication successful.");
    else
-      Print("WARNING: Firebase authentication failed on init - will retry automatically. ",
-            "If this persists, whitelist BOTH of these URLs in Tools > Options > Expert Advisors: ",
-            "https://identitytoolkit.googleapis.com  and  https://securetoken.googleapis.com");
+   {
+      // Resolve credentials: EA inputs first, else a local file shared by all EAs
+      // (MQL5/Files/fxcommander_auth.txt: line 1 = email, line 2 = password).
+      // Read raw bytes and split manually so FileReadString's line-ending quirks
+      // can't swallow both lines into the email field.
+      g_authEmail    = Inp_Email;
+      g_authPassword = Inp_Password;
+      if(g_authEmail == "" || g_authPassword == "")
+      {
+         int hCred = FileOpen("fxcommander_auth.txt", FILE_READ|FILE_BIN);
+         if(hCred != INVALID_HANDLE)
+         {
+            int sz = (int)FileSize(hCred);
+            uchar buf[];
+            if(sz > 0) { ArrayResize(buf, sz); FileReadArray(hCred, buf, 0, sz); }
+            FileClose(hCred);
+            string content = (sz > 0) ? CharArrayToString(buf, 0, sz, CP_UTF8) : "";
+            string parts[];
+            int n = StringSplit(content, '\n', parts);
+            string good[]; int gc = 0;
+            for(int i = 0; i < n; i++)
+            {
+               string ln = parts[i];
+               StringReplace(ln, "\r", "");
+               StringTrimLeft(ln); StringTrimRight(ln);
+               if(StringLen(ln) > 0) { ArrayResize(good, gc + 1); good[gc] = ln; gc++; }
+            }
+            if(gc >= 1 && g_authEmail == "")    g_authEmail    = good[0];
+            if(gc >= 2 && g_authPassword == "") g_authPassword = good[1];
+         }
+      }
+
+      // Authenticate with Firebase to obtain an ID token.
+      // A valid token is required for every Realtime Database request.
+      if(FirebaseSignIn())
+         Print("Firebase authentication successful.");
+      else
+         Print("WARNING: Firebase authentication failed on init - will retry automatically. ",
+               "If this persists, whitelist BOTH of these URLs in Tools > Options > Expert Advisors: ",
+               "https://identitytoolkit.googleapis.com  and  https://securetoken.googleapis.com");
+   }
 
    // Initialize signal reception system
    if(Inp_EnableSignalReceiving)

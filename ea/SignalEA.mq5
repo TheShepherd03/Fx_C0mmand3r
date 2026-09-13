@@ -65,6 +65,11 @@ string g_authPassword = "";
 // token via this local file, so ~20 EAs don't each sign in (TOO_MANY_ATTEMPTS).
 #define FXC_TOKEN_FILE "fxcommander_token.txt"
 
+// Temporary bypass: if this flag file exists, skip Firebase auth and publish
+// unauthenticated (needs open rules on signals/). Delete file + re-lock to undo.
+#define FXC_NOAUTH_FILE "fxcommander_noauth.txt"
+bool   g_noAuth = false;
+
 datetime g_lastPush = 0;
 string   g_lastAction = "";       // last pushed action for this symbol
 double   g_signalStartPrice = 0;  // price when the current action began (for winning/pending)
@@ -202,6 +207,7 @@ void WriteSharedToken()
 //+------------------------------------------------------------------+
 bool EnsureValidToken()
 {
+   if(g_noAuth) return true;   // bypass: publish unauthenticated (open rules)
    datetime now = TimeCurrent();
    if(g_idToken != "" && now < g_tokenExpiry) return true;
    if(ReadSharedToken()) return true;
@@ -252,6 +258,15 @@ int OnInit()
    g_atr = iATR(_Symbol, PERIOD_CURRENT, Inp_ATRPeriod);
 
    g_AccountID = GenerateAccountID();
+
+   // Temporary unauthenticated bypass (flag file present) — skip all auth.
+   if(FileIsExist(FXC_NOAUTH_FILE))
+   {
+      g_noAuth = true;
+      EventSetTimer(Inp_PushInterval < 1 ? 1 : Inp_PushInterval);
+      Print("SignalEA NO-AUTH bypass on ", _Symbol, " | publishing unauthenticated | Account ", g_AccountID);
+      return INIT_SUCCEEDED;
+   }
 
    // Resolve credentials: inputs first, else local fxcommander_auth.txt.
    // Read raw bytes and split manually so FileReadString's line-ending quirks
