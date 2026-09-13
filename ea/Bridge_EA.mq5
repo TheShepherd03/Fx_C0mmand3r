@@ -489,13 +489,13 @@ void OnTick()
    if(g_EAPaused || g_EASchedulePaused)
       return;
    
-   // Position Management (check every tick)
-   if(g_Settings.enableBreakeven)
-      CheckBreakevenPositions();
-   
-   if(g_Settings.enableTrailing)
-      CheckTrailingStops();
-   
+   // Position Management (check every tick). Both functions act ONLY on positions
+   // that have the feature enabled per-position, so they run unconditionally: a
+   // position gets break-even/trailing only if the global toggle applied it at
+   // open OR the user enabled it for that position in the app. Otherwise it's off.
+   CheckBreakevenPositions();
+   CheckTrailingStops();
+
    if(g_Settings.enableTimeManagement)
       CheckTimeBasedManagement();
    
@@ -1977,11 +1977,13 @@ void ExecuteEAPauseCommand(string response)
 //+------------------------------------------------------------------+
 void InitializeDefaultSettings()
 {
-   g_Settings.enableBreakeven = true;
+   // Break-even and trailing are OFF by default: a trade gets them only if the
+   // user enables the global toggle (control screen) or sets it per position.
+   g_Settings.enableBreakeven = false;
    g_Settings.breakevenThresholdPips = 10;
    g_Settings.breakevenUsePercent = false;
    g_Settings.breakevenPercent = 0.5;
-   g_Settings.enableTrailing = true;
+   g_Settings.enableTrailing = false;
    g_Settings.enableTimeManagement = true;
    g_Settings.weekendClose = true;
    g_Settings.dailyTargetPercent = 5.0;
