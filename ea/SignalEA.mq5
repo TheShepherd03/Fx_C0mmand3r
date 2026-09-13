@@ -275,7 +275,8 @@ int OnInit()
    g_authPassword = Inp_Password;
    if(g_authEmail == "" || g_authPassword == "")
    {
-      int hCred = FileOpen("fxcommander_auth.txt", FILE_READ|FILE_BIN);
+      // FILE_SHARE_* so many EAs opening this at once on startup don't collide.
+      int hCred = FileOpen("fxcommander_auth.txt", FILE_READ|FILE_BIN|FILE_SHARE_READ|FILE_SHARE_WRITE);
       if(hCred != INVALID_HANDLE)
       {
          int sz = (int)FileSize(hCred);

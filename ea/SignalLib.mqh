@@ -219,7 +219,9 @@ void SignalLib_LoadCredsIfBlank()
    // Read the whole file as raw bytes and split manually, so we never depend on
    // FileReadString's line-ending semantics (which silently mishandle LF-only /
    // mixed endings and can swallow both lines into one field).
-   int h = FileOpen("fxcommander_auth.txt", FILE_READ|FILE_BIN);
+   // FILE_SHARE_* so ~20 EAs opening this at once on startup don't collide
+   // (exclusive open -> err 5004 -> empty email -> INVALID_EMAIL).
+   int h = FileOpen("fxcommander_auth.txt", FILE_READ|FILE_BIN|FILE_SHARE_READ|FILE_SHARE_WRITE);
    if(h == INVALID_HANDLE) { Print("SignalLib: cred file open failed, err=", GetLastError()); return; }
    int sz = (int)FileSize(h);
    uchar buf[];
