@@ -454,6 +454,9 @@ void OnTimer()
    StringReplace(symbolKey, ".", "_"); StringReplace(symbolKey, "$", "_");
    StringReplace(symbolKey, "#", "_"); StringReplace(symbolKey, "[", "_");
    StringReplace(symbolKey, "]", "_"); StringReplace(symbolKey, "/", "_");
+   // Spaces make the request URL invalid (WebRequest -> -1 / err 4002), so the
+   // broker's spaced names ("Jump 25 Index") must be collapsed too.
+   StringReplace(symbolKey, " ", "_");
    string url = "https://" + Inp_ProjectID + "-default-rtdb.firebaseio.com/signals/" + g_AccountID + "/" + symbolKey + ".json?auth=" + g_idToken;
    char postData[]; StringToCharArray(jsonBody, postData, 0, StringLen(jsonBody));
    char resultData[]; string resultHeaders;
