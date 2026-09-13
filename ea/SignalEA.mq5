@@ -36,6 +36,11 @@ input double Inp_ChopPct       = 0.02;   // EMA/Wilder gap under this % of price
 input double Inp_SignalLots    = 0.05;   // Suggested lot size attached to a signal
 input bool   Inp_Verbose       = true;   // Print detailed logs
 
+input group "=== SL/TP (ATR-based) ==="
+input int    Inp_ATRPeriod     = 14;     // ATR period (chart timeframe)
+input double Inp_SLAtrMult     = 1.5;    // SL distance = this x ATR
+input double Inp_RR            = 2.0;     // TP distance = SL distance x this
+
 //+------------------------------------------------------------------+
 //| Globals                                                           |
 //+------------------------------------------------------------------+
@@ -45,14 +50,20 @@ int    g_periods[NUM_CYCLES];
 ENUM_TIMEFRAMES g_tfs[NUM_CYCLES];
 int    g_emaHandle[NUM_CYCLES];
 int    g_wilderHandle[NUM_CYCLES];
+int    g_atr = INVALID_HANDLE;
 
 string g_idToken = "";
 string g_refreshToken = "";
 datetime g_tokenExpiry = 0;
 datetime g_lastAuthAttempt = 0;
+int    g_authBackoff = 30;   // seconds between real sign-in attempts; grows on rate-limit
 string g_AccountID = "";
 string g_authEmail = "";
 string g_authPassword = "";
+
+// Shared token cache: all FX Commander EAs on this account reuse ONE Firebase
+// token via this local file, so ~20 EAs don't each sign in (TOO_MANY_ATTEMPTS).
+#define FXC_TOKEN_FILE "fxcommander_token.txt"
 
 datetime g_lastPush = 0;
 string   g_lastAction = "";       // last pushed action for this symbol
@@ -143,15 +154,63 @@ bool FirebaseRefreshToken()
 }
 
 //+------------------------------------------------------------------+
-//| Ensure a valid token (throttled retries)                          |
+//| Shared token cache (file), shared with every FX Commander EA.     |
+//+------------------------------------------------------------------+
+bool ReadSharedToken()
+{
+   int h = FileOpen(FXC_TOKEN_FILE, FILE_READ|FILE_BIN|FILE_SHARE_READ|FILE_SHARE_WRITE);
+   if(h == INVALID_HANDLE) return false;
+   int sz = (int)FileSize(h);
+   uchar buf[];
+   if(sz > 0) { ArrayResize(buf, sz); FileReadArray(h, buf, 0, sz); }
+   FileClose(h);
+   if(sz <= 0) return false;
+   string content = CharArrayToString(buf, 0, sz, CP_UTF8);
+   string parts[];
+   int n = StringSplit(content, '\n', parts);
+   string good[]; int gc = 0;
+   for(int i = 0; i < n; i++)
+   {
+      string ln = parts[i];
+      StringReplace(ln, "\r", "");
+      StringTrimLeft(ln); StringTrimRight(ln);
+      if(StringLen(ln) > 0) { ArrayResize(good, gc + 1); good[gc] = ln; gc++; }
+   }
+   if(gc < 3) return false;
+   datetime exp = (datetime)StringToInteger(good[2]);
+   if(TimeCurrent() >= exp - 60) return false;
+   g_idToken      = good[0];
+   g_refreshToken = good[1];
+   g_tokenExpiry  = exp;
+   return (g_idToken != "");
+}
+
+void WriteSharedToken()
+{
+   int h = FileOpen(FXC_TOKEN_FILE, FILE_WRITE|FILE_BIN|FILE_SHARE_READ|FILE_SHARE_WRITE);
+   if(h == INVALID_HANDLE) return;
+   string content = g_idToken + "\n" + g_refreshToken + "\n" + IntegerToString((long)g_tokenExpiry) + "\n";
+   uchar buf[];
+   int len = StringToCharArray(content, buf, 0, StringLen(content), CP_UTF8);
+   if(len > 0) FileWriteArray(h, buf, 0, len);
+   FileClose(h);
+}
+
+//+------------------------------------------------------------------+
+//| Ensure a valid token: in-memory -> shared file -> sign-in/refresh |
+//| (throttled with backoff so many EAs don't storm Firebase auth).   |
 //+------------------------------------------------------------------+
 bool EnsureValidToken()
 {
-   if(g_idToken != "" && TimeCurrent() < g_tokenExpiry) return true;
-   if(TimeCurrent() - g_lastAuthAttempt < 30) return false;
-   g_lastAuthAttempt = TimeCurrent();
-   if(g_idToken == "") return FirebaseSignIn();
-   return FirebaseRefreshToken();
+   datetime now = TimeCurrent();
+   if(g_idToken != "" && now < g_tokenExpiry) return true;
+   if(ReadSharedToken()) return true;
+   if(now - g_lastAuthAttempt < g_authBackoff) return false;
+   g_lastAuthAttempt = now;
+   bool ok = (g_idToken == "") ? FirebaseSignIn() : FirebaseRefreshToken();
+   if(ok) { g_authBackoff = 30; WriteSharedToken(); }
+   else   { g_authBackoff = (g_authBackoff * 2 > 600) ? 600 : g_authBackoff * 2; }
+   return ok;
 }
 
 //+------------------------------------------------------------------+
@@ -190,27 +249,53 @@ int OnInit()
       }
    }
 
+   g_atr = iATR(_Symbol, PERIOD_CURRENT, Inp_ATRPeriod);
+
    g_AccountID = GenerateAccountID();
 
-   // Resolve credentials: inputs first, else local fxcommander_auth.txt
+   // Resolve credentials: inputs first, else local fxcommander_auth.txt.
+   // Read raw bytes and split manually so FileReadString's line-ending quirks
+   // (LF-only / mixed) can't swallow both lines into the email field.
    g_authEmail    = Inp_Email;
    g_authPassword = Inp_Password;
    if(g_authEmail == "" || g_authPassword == "")
    {
-      int hCred = FileOpen("fxcommander_auth.txt", FILE_READ|FILE_TXT|FILE_ANSI);
+      int hCred = FileOpen("fxcommander_auth.txt", FILE_READ|FILE_BIN);
       if(hCred != INVALID_HANDLE)
       {
-         string e = FileReadString(hCred);
-         string p = FileReadString(hCred);
+         int sz = (int)FileSize(hCred);
+         uchar buf[];
+         if(sz > 0) { ArrayResize(buf, sz); FileReadArray(hCred, buf, 0, sz); }
          FileClose(hCred);
-         StringTrimLeft(e); StringTrimRight(e);
-         StringTrimLeft(p); StringTrimRight(p);
-         if(g_authEmail == "")    g_authEmail = e;
-         if(g_authPassword == "") g_authPassword = p;
+         string content = (sz > 0) ? CharArrayToString(buf, 0, sz, CP_UTF8) : "";
+         string parts[];
+         int n = StringSplit(content, '\n', parts);
+         string good[]; int gc = 0;
+         for(int i = 0; i < n; i++)
+         {
+            string ln = parts[i];
+            StringReplace(ln, "\r", "");
+            StringTrimLeft(ln); StringTrimRight(ln);
+            if(StringLen(ln) > 0) { ArrayResize(good, gc + 1); good[gc] = ln; gc++; }
+         }
+         if(gc >= 1 && g_authEmail == "")    g_authEmail    = good[0];
+         if(gc >= 2 && g_authPassword == "") g_authPassword = good[1];
+         Print("SignalEA creds loaded: lines=", gc, " emailLen=", StringLen(g_authEmail), " pwLen=", StringLen(g_authPassword));
       }
+      else Print("SignalEA: cred file open failed, err=", GetLastError());
    }
 
-   FirebaseSignIn();
+   // Don't sign in inline (that makes ~20 EAs storm Firebase on load). Reuse a
+   // token cached in the shared file if present, else stagger the first real
+   // sign-in by a random 0-120s so instances don't all hit the network at once.
+   if(ReadSharedToken())
+      Print("SignalEA auth: reused shared token on ", _Symbol);
+   else
+   {
+      MathSrand((int)(GetMicrosecondCount() + TimeLocal()));
+      g_lastAuthAttempt = TimeCurrent() + (MathRand() % 120);
+      Print("SignalEA auth: deferred/staggered on ", _Symbol);
+   }
 
    EventSetTimer(Inp_PushInterval < 1 ? 1 : Inp_PushInterval);
    Print("SignalEA initialized on ", _Symbol, " | Account ", g_AccountID);
@@ -225,6 +310,7 @@ void OnDeinit(const int reason)
       if(g_emaHandle[i]!=INVALID_HANDLE)    IndicatorRelease(g_emaHandle[i]);
       if(g_wilderHandle[i]!=INVALID_HANDLE) IndicatorRelease(g_wilderHandle[i]);
    }
+   if(g_atr!=INVALID_HANDLE) IndicatorRelease(g_atr);
    Print("SignalEA stopped on ", _Symbol);
 }
 
@@ -318,9 +404,20 @@ void OnTimer()
    root.Add("symbol", _Symbol);
    root.Add("action", action);
    root.Add("price", NormalizeDouble(price, digits));
-   root.Add("sl", 0);
-   root.Add("tp", 0);
+   // ATR-based SL/TP so EMA signals aren't stop-less when executed
+   double atrVal = 0; { double _ab[]; if(CopyBuffer(g_atr, 0, 1, 1, _ab) > 0) atrVal = _ab[0]; }
+   double slv = 0, tpv = 0;
+   if(atrVal > 0 && (action == "BUY" || action == "SELL"))
+   {
+      double dd = atrVal * Inp_SLAtrMult;
+      if(action == "BUY") { slv = price - dd; tpv = price + dd * Inp_RR; }
+      else                { slv = price + dd; tpv = price - dd * Inp_RR; }
+   }
+   root.Add("sl", (slv > 0) ? NormalizeDouble(slv, digits) : 0);
+   root.Add("tp", (tpv > 0) ? NormalizeDouble(tpv, digits) : 0);
    root.Add("lots", Inp_SignalLots);
+   root.Add("tickValue", SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE));
+   root.Add("tickSize",  SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE));
    root.Add("source", "EMA Engine");
    root.Add("confidence", confidence);
    root.Add("alignedCount", aligned);

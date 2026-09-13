@@ -19,7 +19,12 @@ string   g_sl_idToken        = "";
 string   g_sl_refreshToken   = "";
 datetime g_sl_tokenExpiry    = 0;
 datetime g_sl_lastAuthAttempt= 0;
+int      g_sl_authBackoff    = 30;   // seconds between real sign-in attempts; grows on rate-limit
 string   g_sl_accountId      = "";
+
+// Shared token cache: all EAs on this account reuse ONE Firebase token via a
+// local file, so ~20 EAs don't each sign in (which trips TOO_MANY_ATTEMPTS).
+#define FXC_TOKEN_FILE "fxcommander_token.txt"
 
 // --- Live signals this EA has published (for SL/TP-hit + expiry pruning) ---
 struct SL_Tracked
@@ -125,15 +130,73 @@ bool SignalLib_Refresh()
 }
 
 //+------------------------------------------------------------------+
-//| Ensure a valid token (throttled)                                  |
+//| Shared token cache (file): read a still-valid token written by any |
+//| EA on this account, so we can skip signing in ourselves.           |
+//+------------------------------------------------------------------+
+bool SignalLib_ReadSharedToken()
+{
+   int h = FileOpen(FXC_TOKEN_FILE, FILE_READ|FILE_BIN|FILE_SHARE_READ|FILE_SHARE_WRITE);
+   if(h == INVALID_HANDLE) return false;
+   int sz = (int)FileSize(h);
+   uchar buf[];
+   if(sz > 0) { ArrayResize(buf, sz); FileReadArray(h, buf, 0, sz); }
+   FileClose(h);
+   if(sz <= 0) return false;
+   string content = CharArrayToString(buf, 0, sz, CP_UTF8);
+   string parts[];
+   int n = StringSplit(content, '\n', parts);
+   string good[]; int gc = 0;
+   for(int i = 0; i < n; i++)
+   {
+      string ln = parts[i];
+      StringReplace(ln, "\r", "");
+      StringTrimLeft(ln); StringTrimRight(ln);
+      if(StringLen(ln) > 0) { ArrayResize(good, gc + 1); good[gc] = ln; gc++; }
+   }
+   if(gc < 3) return false;
+   datetime exp = (datetime)StringToInteger(good[2]);
+   if(TimeCurrent() >= exp - 60) return false;   // stale / about to expire
+   g_sl_idToken      = good[0];
+   g_sl_refreshToken = good[1];
+   g_sl_tokenExpiry  = exp;
+   return (g_sl_idToken != "");
+}
+
+void SignalLib_WriteSharedToken()
+{
+   int h = FileOpen(FXC_TOKEN_FILE, FILE_WRITE|FILE_BIN|FILE_SHARE_READ|FILE_SHARE_WRITE);
+   if(h == INVALID_HANDLE) return;
+   string content = g_sl_idToken + "\n" + g_sl_refreshToken + "\n" + IntegerToString((long)g_sl_tokenExpiry) + "\n";
+   uchar buf[];
+   int len = StringToCharArray(content, buf, 0, StringLen(content), CP_UTF8);
+   if(len > 0) FileWriteArray(h, buf, 0, len);
+   FileClose(h);
+}
+
+//+------------------------------------------------------------------+
+//| Ensure a valid token: reuse in-memory, else the shared file, else |
+//| sign in / refresh (throttled with backoff so 20 EAs don't storm). |
 //+------------------------------------------------------------------+
 bool SignalLib_EnsureAuth()
 {
-   if(g_sl_idToken != "" && TimeCurrent() < g_sl_tokenExpiry) return true;
-   if(TimeCurrent() - g_sl_lastAuthAttempt < 30) return false;
-   g_sl_lastAuthAttempt = TimeCurrent();
-   if(g_sl_idToken == "") return SignalLib_SignIn();
-   return SignalLib_Refresh();
+   datetime now = TimeCurrent();
+   if(g_sl_idToken != "" && now < g_sl_tokenExpiry) return true;
+   // Another EA may already have a fresh token cached in the shared file.
+   if(SignalLib_ReadSharedToken()) return true;
+   // We must hit the network — throttle with backoff (grows on rate-limit).
+   if(now - g_sl_lastAuthAttempt < g_sl_authBackoff) return false;
+   g_sl_lastAuthAttempt = now;
+   bool ok = (g_sl_idToken == "") ? SignalLib_SignIn() : SignalLib_Refresh();
+   if(ok)
+   {
+      g_sl_authBackoff = 30;
+      SignalLib_WriteSharedToken();
+   }
+   else
+   {
+      g_sl_authBackoff = (g_sl_authBackoff * 2 > 600) ? 600 : g_sl_authBackoff * 2;  // up to 10 min
+   }
+   return ok;
 }
 
 //+------------------------------------------------------------------+
@@ -146,15 +209,29 @@ bool SignalLib_EnsureAuth()
 void SignalLib_LoadCredsIfBlank()
 {
    if(g_sl_email != "" && g_sl_password != "") return;
-   int h = FileOpen("fxcommander_auth.txt", FILE_READ|FILE_TXT|FILE_ANSI);
-   if(h == INVALID_HANDLE) return;
-   string e = FileReadString(h);
-   string p = FileReadString(h);
+   // Read the whole file as raw bytes and split manually, so we never depend on
+   // FileReadString's line-ending semantics (which silently mishandle LF-only /
+   // mixed endings and can swallow both lines into one field).
+   int h = FileOpen("fxcommander_auth.txt", FILE_READ|FILE_BIN);
+   if(h == INVALID_HANDLE) { Print("SignalLib: cred file open failed, err=", GetLastError()); return; }
+   int sz = (int)FileSize(h);
+   uchar buf[];
+   if(sz > 0) { ArrayResize(buf, sz); FileReadArray(h, buf, 0, sz); }
    FileClose(h);
-   StringTrimLeft(e); StringTrimRight(e);
-   StringTrimLeft(p); StringTrimRight(p);
-   if(g_sl_email == "")    g_sl_email = e;
-   if(g_sl_password == "") g_sl_password = p;
+   string content = (sz > 0) ? CharArrayToString(buf, 0, sz, CP_UTF8) : "";
+   string parts[];
+   int n = StringSplit(content, '\n', parts);
+   string good[]; int gc = 0;
+   for(int i = 0; i < n; i++)
+   {
+      string ln = parts[i];
+      StringReplace(ln, "\r", "");
+      StringTrimLeft(ln); StringTrimRight(ln);
+      if(StringLen(ln) > 0) { ArrayResize(good, gc + 1); good[gc] = ln; gc++; }
+   }
+   if(gc >= 1 && g_sl_email == "")    g_sl_email    = good[0];
+   if(gc >= 2 && g_sl_password == "") g_sl_password = good[1];
+   Print("SignalLib creds loaded: lines=", gc, " emailLen=", StringLen(g_sl_email), " pwLen=", StringLen(g_sl_password));
 }
 
 bool SignalLib_Init(string projectId, string apiKey, string email, string password)
@@ -165,8 +242,22 @@ bool SignalLib_Init(string projectId, string apiKey, string email, string passwo
    g_sl_password  = password;
    SignalLib_LoadCredsIfBlank();
    g_sl_accountId = SignalLib_AccountID();
-   bool ok = SignalLib_SignIn();
-   Print("SignalLib init for account ", g_sl_accountId, ok ? " (auth OK)" : " (auth FAILED - check email/password)");
+   // Don't sign in inline (that makes ~20 EAs storm Firebase on load). Prefer a
+   // token already cached in the shared file; otherwise stagger the first real
+   // sign-in by a random 0-120s so instances don't all hit the network at once.
+   bool ok;
+   if(SignalLib_ReadSharedToken())
+   {
+      ok = true;
+      Print("SignalLib init for account ", g_sl_accountId, " (reused shared token)");
+   }
+   else
+   {
+      MathSrand((int)(GetMicrosecondCount() + TimeLocal()));       // unique per EA instance
+      g_sl_lastAuthAttempt = TimeCurrent() + (MathRand() % 120);   // future => EnsureAuth waits, staggered
+      ok = false;
+      Print("SignalLib init for account ", g_sl_accountId, " (auth deferred, staggered)");
+   }
    return ok;
 }
 
@@ -187,6 +278,8 @@ bool PublishSignal(string symbol, string action, double entry, double sl, double
    o.Add("sl",         NormalizeDouble(sl, digits));
    o.Add("tp",         NormalizeDouble(tp, digits));
    o.Add("lots",       lots);
+   o.Add("tickValue",  SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE));
+   o.Add("tickSize",   SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE));
    o.Add("source",     source);
    o.Add("confidence", confidence);
    o.Add("status",     "pending");
