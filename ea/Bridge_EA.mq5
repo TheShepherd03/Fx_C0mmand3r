@@ -1482,8 +1482,12 @@ void AddPositionManagement(long ticket)
    g_PosManagement[g_PosManagementCount].breakevenUsePercent = g_Settings.breakevenUsePercent;
    g_PosManagement[g_PosManagementCount].breakevenPercent = g_Settings.breakevenPercent;
    g_PosManagement[g_PosManagementCount].breakevenTriggered = false;
-   g_PosManagement[g_PosManagementCount].trailingEnabled = g_Settings.enableTrailing;
-   g_PosManagement[g_PosManagementCount].trailingPercentage = 20; // Default 20%
+   // Trailing is OPT-IN per position (enabled from the app's Trailing tab), never
+   // auto-applied to new trades. CheckTrailingStops still honours positions the
+   // user explicitly enables. (Breakeven above intentionally follows the global
+   // setting so the global break-even % feature applies to all trades.)
+   g_PosManagement[g_PosManagementCount].trailingEnabled = false;
+   g_PosManagement[g_PosManagementCount].trailingPercentage = 20; // Default 20% (used once enabled)
    g_PosManagement[g_PosManagementCount].lastTrailPrice = 0;
    g_PosManagement[g_PosManagementCount].timeLimit = 0;
    g_PosManagement[g_PosManagementCount].weekendClose = g_Settings.weekendClose;
