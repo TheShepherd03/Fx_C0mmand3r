@@ -55,7 +55,6 @@ export function PositionManagementModal({
 
   // Time management settings
   const [timeLimit, setTimeLimit] = useState('');
-  const [weekendClose, setWeekendClose] = useState(true);
 
   useEffect(() => {
     if (position) {
@@ -526,20 +525,8 @@ export function PositionManagementModal({
                   Time Management
                 </Text>
                 <Text style={[styles.description, { color: theme.colors.textSecondary }]}>
-                  Automatic position management based on time
+                  Auto-close this position after it has been open for the set number of hours
                 </Text>
-
-                <View style={styles.settingRow}>
-                  <Text style={[styles.settingLabel, { color: theme.colors.text }]}>
-                    Weekend Close
-                  </Text>
-                  <Switch
-                    value={weekendClose}
-                    onValueChange={setWeekendClose}
-                    trackColor={{ false: theme.colors.input, true: theme.colors.primary }}
-                    thumbColor="#FFF"
-                  />
-                </View>
 
                 <View style={styles.inputGroup}>
                   <Text style={[styles.inputLabel, { color: theme.colors.text }]}>
