@@ -280,6 +280,47 @@ bool SignalLib_Init(string projectId, string apiKey, string email, string passwo
 }
 
 //+------------------------------------------------------------------+
+//| Send one Expo push message to a device token.                     |
+//| Requires https://exp.host whitelisted in Tools>Options>Experts.   |
+//+------------------------------------------------------------------+
+void SignalLib_SendExpoPush(string token, string title, string body)
+{
+   string url = "https://exp.host/--/api/v2/push/send";
+   string payload = "{\"to\":\"" + token + "\",\"title\":\"" + title +
+                    "\",\"body\":\"" + body + "\",\"sound\":\"default\",\"channelId\":\"signals\",\"priority\":\"high\"}";
+   char post[]; StringToCharArray(payload, post, 0, StringLen(payload));
+   char res[]; string hdr;
+   WebRequest("POST", url, "Content-Type: application/json\r\n", 5000, post, res, hdr);
+}
+
+//+------------------------------------------------------------------+
+//| Push a "new signal" alert to every device token registered for   |
+//| this account (pushTokens/{account}). Best-effort; ignores errors. |
+//+------------------------------------------------------------------+
+void SignalLib_Notify(string title, string body)
+{
+   if(!SignalLib_EnsureAuth()) return;
+   string url = "https://" + g_sl_projectId + "-default-rtdb.firebaseio.com/pushTokens/" + g_sl_accountId + ".json?auth=" + g_sl_idToken;
+   char post[]; char res[]; string hdr;
+   int r = WebRequest("GET", url, NULL, 3000, post, res, hdr);
+   if(r != 200) return;
+   string resp = CharArrayToString(res);
+   if(resp == "null" || StringLen(resp) < 12) return;   // no tokens registered
+   // Extract each "ExponentPushToken[...]" occurrence and notify it.
+   int pos = 0;
+   while(true)
+   {
+      int s = StringFind(resp, "ExponentPushToken[", pos);
+      if(s < 0) break;
+      int e = StringFind(resp, "]", s);
+      if(e < 0) break;
+      string token = StringSubstr(resp, s, e - s + 1);
+      SignalLib_SendExpoPush(token, title, body);
+      pos = e + 1;
+   }
+}
+
+//+------------------------------------------------------------------+
 //| Publish a discrete signal (appends via POST). true on HTTP 200.   |
 //|  action: "BUY" or "SELL"; expirySeconds: how long it stays live.  |
 //+------------------------------------------------------------------+
@@ -326,6 +367,7 @@ bool PublishSignal(string symbol, string action, double entry, double sl, double
       int idx = -1;
       for(int t = 0; t < ArraySize(g_sl_tracked); t++)
          if(g_sl_tracked[t].key == key) { idx = t; break; }
+      bool isNew = (idx < 0);   // first time we see this (source, symbol) setup
       if(idx < 0) { idx = ArraySize(g_sl_tracked); ArrayResize(g_sl_tracked, idx + 1); }
       g_sl_tracked[idx].key       = key;
       g_sl_tracked[idx].symbol    = symbol;
@@ -336,6 +378,11 @@ bool PublishSignal(string symbol, string action, double entry, double sl, double
       g_sl_tracked[idx].expiresAt = (datetime)(TimeCurrent() + expirySeconds);
       g_sl_tracked[idx].status    = "pending";
       Print("Signal published: ", source, " ", symbol, " ", action, " @", entry);
+      // Push-notify only the first time this setup appears (not on re-publishes).
+      if(isNew)
+         SignalLib_Notify(action + " " + symbol,
+                          source + "  @ " + DoubleToString(entry, digits) +
+                          "  SL " + DoubleToString(sl, digits) + "  TP " + DoubleToString(tp, digits));
    }
    else Print("Signal publish FAILED HTTP ", r, " ", CharArrayToString(res));
    return (r == 200);

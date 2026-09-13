@@ -220,6 +220,41 @@ bool EnsureValidToken()
 }
 
 //+------------------------------------------------------------------+
+//| Push-notify every device registered for this account when a new  |
+//| directional signal appears. Needs https://exp.host whitelisted.  |
+//+------------------------------------------------------------------+
+void SendExpoPush(string token, string title, string body)
+{
+   string url = "https://exp.host/--/api/v2/push/send";
+   string payload = "{\"to\":\"" + token + "\",\"title\":\"" + title +
+                    "\",\"body\":\"" + body + "\",\"sound\":\"default\",\"channelId\":\"signals\",\"priority\":\"high\"}";
+   char post[]; StringToCharArray(payload, post, 0, StringLen(payload));
+   char res[]; string hdr;
+   WebRequest("POST", url, "Content-Type: application/json\r\n", 5000, post, res, hdr);
+}
+
+void NotifyNewSignal(string title, string body)
+{
+   if(!EnsureValidToken()) return;
+   string url = "https://" + Inp_ProjectID + "-default-rtdb.firebaseio.com/pushTokens/" + g_AccountID + ".json?auth=" + g_idToken;
+   char post[]; char res[]; string hdr;
+   int r = WebRequest("GET", url, NULL, 3000, post, res, hdr);
+   if(r != 200) return;
+   string resp = CharArrayToString(res);
+   if(resp == "null" || StringLen(resp) < 12) return;
+   int pos = 0;
+   while(true)
+   {
+      int s = StringFind(resp, "ExponentPushToken[", pos);
+      if(s < 0) break;
+      int e = StringFind(resp, "]", s);
+      if(e < 0) break;
+      SendExpoPush(StringSubstr(resp, s, e - s + 1), title, body);
+      pos = e + 1;
+   }
+}
+
+//+------------------------------------------------------------------+
 //| Unique account id: Company_Server_AccountNumber                   |
 //+------------------------------------------------------------------+
 string GenerateAccountID()
@@ -404,7 +439,9 @@ void OnTimer()
    int aligned = MathMax(upCount, downCount);
    int confidence = (int)MathRound((double)aligned / available * 100.0);
 
-   // Winning / pending: track price since the action began
+   // Winning / pending: track price since the action began. A change to a new
+   // directional call (BUY/SELL) is a fresh signal worth a push notification.
+   bool newDirection = (action != g_lastAction) && (action == "BUY" || action == "SELL");
    if(action != g_lastAction)
    {
       g_lastAction = action;
@@ -477,10 +514,16 @@ void OnTimer()
          Print("SignalEA push failed twice on ", _Symbol, " err(1)=", err1, " err(2)=", GetLastError());
    }
 
-   if(Inp_Verbose && res != -1)
+   if(res == 200)
    {
-      if(res == 200) Print("SignalEA ", _Symbol, " -> ", action, " (", confidence, "%, up=", upCount, " down=", downCount, ")");
-      else Print("SignalEA push failed: HTTP ", res, " ", CharArrayToString(resultData));
+      if(Inp_Verbose) Print("SignalEA ", _Symbol, " -> ", action, " (", confidence, "%, up=", upCount, " down=", downCount, ")");
+      // New directional signal for this symbol -> push notify.
+      if(newDirection)
+         NotifyNewSignal(action + " " + _Symbol,
+                         "EMA Engine  @ " + DoubleToString(price, digits) +
+                         "  SL " + DoubleToString(slv, digits) + "  TP " + DoubleToString(tpv, digits));
    }
+   else if(Inp_Verbose && res != -1)
+      Print("SignalEA push failed: HTTP ", res, " ", CharArrayToString(resultData));
 }
 //+------------------------------------------------------------------+

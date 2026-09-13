@@ -8,9 +8,11 @@ import { IconSymbol } from '@/components/ui/icon-symbol';
 import { LiveStatusBar } from '@/components/LiveStatusBar';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { usePushNotifications } from '@/hooks/usePushNotifications';
 
 export default function TabLayout() {
   const colorScheme = useColorScheme();
+  usePushNotifications(); // register device for new-signal push notifications
 
   return (
     <Tabs

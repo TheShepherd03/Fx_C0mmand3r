@@ -2,7 +2,7 @@
   "expo": {
     "name": "FX Commander",
     "slug": "fx-commander",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "fxcommander",
@@ -31,6 +31,12 @@
     },
     "plugins": [
       "expo-router",
+      [
+        "expo-notifications",
+        {
+          "color": "#2196F3"
+        }
+      ],
       [
         "expo-splash-screen",
         {
