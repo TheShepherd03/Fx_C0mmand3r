@@ -7,13 +7,14 @@ import { IconSymbol } from '@/components/ui/icon-symbol';
 interface Props {
   signal: Signal | null;
   balance: number | undefined;
+  initialLots?: number;   // lot chosen inline on the card; seeds the sheet if provided
   visible: boolean;
   busy?: boolean;
   onClose: () => void;
   onConfirm: (lots: number, sl: number, tp: number) => void;
 }
 
-export function ExecuteSignalModal({ signal, balance, visible, busy, onClose, onConfirm }: Props) {
+export function ExecuteSignalModal({ signal, balance, initialLots, visible, busy, onClose, onConfirm }: Props) {
   const { theme } = useTheme();
   const [lots, setLots] = useState('0.05');
   const [sl, setSl] = useState('');
@@ -40,9 +41,15 @@ export function ExecuteSignalModal({ signal, balance, visible, busy, onClose, on
     if (signal) {
       setSl(signal.sl > 0 ? String(signal.sl) : '');
       setTp(signal.tp > 0 ? String(signal.tp) : '');
-      const sized = canSize ? lotsForRisk(1, signal.sl) : null;
-      setLots(String(sized ?? signal.lots ?? 0.05));
-      setRiskPct('1');
+      if (initialLots && initialLots > 0) {
+        // Respect the lot the user already dialled in on the card.
+        setLots(String(initialLots));
+        setRiskPct('');
+      } else {
+        const sized = canSize ? lotsForRisk(1, signal.sl) : null;
+        setLots(String(sized ?? signal.lots ?? 0.05));
+        setRiskPct('1');
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [signal]);

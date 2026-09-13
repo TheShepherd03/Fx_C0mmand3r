@@ -25,7 +25,17 @@ export default function SignalsScreen() {
   const [showSearch, setShowSearch] = useState(false);
   const [execSignal, setExecSignal] = useState<Signal | null>(null);
   const [execVisible, setExecVisible] = useState(false);
+  const [lotOverrides, setLotOverrides] = useState<Record<string, number>>({});
   const { data: acctData } = useAccountData();
+
+  const LOT_STEP = 0.01;
+  const LOT_MIN = 0.01;
+  // Current lot for a signal: the user's inline override, else the signal's own lot, else a default.
+  const lotFor = (item: Signal) => lotOverrides[item.id] ?? (item.lots > 0 ? item.lots : 0.05);
+  const adjustLot = (item: Signal, delta: number) => {
+    const next = Math.max(LOT_MIN, Math.round((lotFor(item) + delta) * 100) / 100);
+    setLotOverrides(prev => ({ ...prev, [item.id]: next }));
+  };
 
   useEffect(() => {
     if (!selectedAccount) {
@@ -233,7 +243,30 @@ export default function SignalsScreen() {
             ]}>
               {isBuy ? 'BUY MARKET' : 'SELL MARKET'}
             </Text>
-            <Text style={[styles.lotText, { color: theme.colors.text }]}>Lot: {item.lots}</Text>
+            {(isPending || isWinning) ? (
+              <View style={styles.lotStepper}>
+                <Text style={[styles.lotStepLabel, { color: theme.colors.textSecondary }]}>Lot</Text>
+                <TouchableOpacity
+                  style={[styles.lotStepBtn, { borderColor: theme.colors.border }]}
+                  onPress={() => adjustLot(item, -LOT_STEP)}
+                  disabled={isProcessing}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Text style={[styles.lotStepSign, { color: theme.colors.text }]}>−</Text>
+                </TouchableOpacity>
+                <Text style={[styles.lotStepValue, { color: theme.colors.text }]}>{lotFor(item).toFixed(2)}</Text>
+                <TouchableOpacity
+                  style={[styles.lotStepBtn, { borderColor: theme.colors.border }]}
+                  onPress={() => adjustLot(item, LOT_STEP)}
+                  disabled={isProcessing}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Text style={[styles.lotStepSign, { color: theme.colors.text }]}>+</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <Text style={[styles.lotText, { color: theme.colors.text }]}>Lot: {item.lots}</Text>
+            )}
           </View>
 
           <View style={styles.grid}>
@@ -396,6 +429,7 @@ export default function SignalsScreen() {
       <ExecuteSignalModal
         signal={execSignal}
         balance={acctData?.balance}
+        initialLots={execSignal ? lotFor(execSignal) : undefined}
         visible={execVisible}
         busy={execSignal ? executingIds.has(execSignal.id) : false}
         onClose={() => setExecVisible(false)}
@@ -566,6 +600,35 @@ const styles = StyleSheet.create({
   lotText: {
     fontSize: 14,
     fontWeight: '600',
+  },
+  lotStepper: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  lotStepLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    marginRight: 8,
+  },
+  lotStepBtn: {
+    width: 30,
+    height: 30,
+    borderRadius: 8,
+    borderWidth: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  lotStepSign: {
+    fontSize: 20,
+    fontWeight: '700',
+    lineHeight: 22,
+  },
+  lotStepValue: {
+    fontSize: 15,
+    fontWeight: '700',
+    minWidth: 46,
+    textAlign: 'center',
+    fontFamily: 'monospace',
   },
   grid: {
     flexDirection: 'row',
