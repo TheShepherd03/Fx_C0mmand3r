@@ -7,12 +7,14 @@ import { AccountSelector } from '@/components/AccountSelector';
 import { useAccount } from '@/contexts/AccountContext';
 import { useAccountData } from '@/hooks/useAccountData';
 import { useTheme } from '@/contexts/ThemeContext';
+import { usePrivacy } from '@/contexts/PrivacyContext';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 
 export default function CommandsScreen() {
   const { selectedAccount } = useAccount();
   const { data } = useAccountData();
   const { theme } = useTheme();
+  const { statusBarEnabled, toggleStatusBar } = usePrivacy();
 
   // State
   const [autoTrading, setAutoTrading] = useState(true);
@@ -198,6 +200,23 @@ export default function CommandsScreen() {
             </View>
             <Text style={[styles.toggleTitle, { color: theme.colors.text }]}>Hedge Mode</Text>
             <Text style={[styles.toggleDesc, { color: theme.colors.textSecondary }]}>Simultaneous positions</Text>
+          </View>
+        </View>
+
+        {/* Display preferences */}
+        <View style={styles.section}>
+          <Text style={[styles.sectionLabel, { color: theme.colors.textSecondary }]}>DISPLAY</Text>
+          <View style={[styles.settingRow, { backgroundColor: theme.colors.card }]}>
+            <View style={{ flex: 1, paddingRight: 12 }}>
+              <Text style={[styles.settingTitle, { color: theme.colors.text }]}>Live P/L + Risk bar</Text>
+              <Text style={[styles.settingDesc, { color: theme.colors.textSecondary }]}>Always-on strip above the tabs</Text>
+            </View>
+            <Switch
+              value={statusBarEnabled}
+              onValueChange={toggleStatusBar}
+              trackColor={{ false: theme.colors.input, true: theme.colors.primary }}
+              thumbColor="#FFF"
+            />
           </View>
         </View>
 
@@ -395,6 +414,22 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     letterSpacing: 0.5,
     textTransform: 'uppercase',
+  },
+  settingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+  },
+  settingTitle: {
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  settingDesc: {
+    fontSize: 12,
+    marginTop: 2,
   },
   killSwitch: {
     flexDirection: 'row',

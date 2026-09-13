@@ -12,7 +12,9 @@ import { totalRisk, totalPnL } from '@/utils/positionMath';
 export function LiveStatusBar() {
   const { data } = useAccountData();
   const { theme } = useTheme();
-  const { hidden } = usePrivacy();
+  const { hidden, statusBarEnabled } = usePrivacy();
+
+  if (!statusBarEnabled) return null;
 
   const positions = data?.positions ?? [];
   const pnl = totalPnL(positions);
