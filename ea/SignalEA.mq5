@@ -447,22 +447,24 @@ void OnTimer()
    string jsonBody = root.ToString();
    delete root; // frees cyclesArr too
 
-   // PUT to signals/{account}/{symbolKey} so multiple charts consolidate & self-update.
-   // Firebase keys can't contain . $ # [ ] / so sanitize the symbol for the key only
-   // (the real name is preserved in the "symbol" field for display).
+   // Upsert this symbol's entry under signals/{account} so charts consolidate &
+   // self-update. We PATCH the parent node with a single-child object rather than
+   // PUT-ting signals/{account}/{symbolKey}: that keeps the ~905-char auth token
+   // out of a longer per-key URL. MQL5 WebRequest rejects URLs over ~1024 chars
+   // (returns -1 / err 4002); the per-key PUT URL was ~1028 and failed, while this
+   // PATCH URL is ~1014 (same as the working POSTs). The symbol key moves to the body.
+   // Firebase child keys can't contain . $ # [ ] / (and a space would need the key
+   // in a URL elsewhere), so sanitize it; the real name stays in the "symbol" field.
    string symbolKey = _Symbol;
    StringReplace(symbolKey, ".", "_"); StringReplace(symbolKey, "$", "_");
    StringReplace(symbolKey, "#", "_"); StringReplace(symbolKey, "[", "_");
    StringReplace(symbolKey, "]", "_"); StringReplace(symbolKey, "/", "_");
-   // Spaces make the request URL invalid (WebRequest -> -1 / err 4002), so the
-   // broker's spaced names ("Jump 25 Index") must be collapsed too.
    StringReplace(symbolKey, " ", "_");
-   string url = "https://" + Inp_ProjectID + "-default-rtdb.firebaseio.com/signals/" + g_AccountID + "/" + symbolKey + ".json?auth=" + g_idToken;
-   char postData[]; StringToCharArray(jsonBody, postData, 0, StringLen(jsonBody));
+   string patchBody = "{\"" + symbolKey + "\":" + jsonBody + "}";
+   string url = "https://" + Inp_ProjectID + "-default-rtdb.firebaseio.com/signals/" + g_AccountID + ".json?auth=" + g_idToken;
+   char postData[]; StringToCharArray(patchBody, postData, 0, StringLen(patchBody));
    char resultData[]; string resultHeaders;
-   // Longer timeout than the small POSTs elsewhere: this PUT carries the full
-   // multi-timeframe payload and competes with ~20 EAs hitting the same host.
-   int res = WebRequest("PUT", url, "Content-Type: application/json\r\n", 15000, postData, resultData, resultHeaders);
+   int res = WebRequest("PATCH", url, "Content-Type: application/json\r\n", 15000, postData, resultData, resultHeaders);
    if(res == -1)
    {
       // Transient transport failure (timeout / connection drop). Retry once.
@@ -470,7 +472,7 @@ void OnTimer()
       ResetLastError();
       Sleep(250);
       ArrayResize(resultData, 0);
-      res = WebRequest("PUT", url, "Content-Type: application/json\r\n", 15000, postData, resultData, resultHeaders);
+      res = WebRequest("PATCH", url, "Content-Type: application/json\r\n", 15000, postData, resultData, resultHeaders);
       if(res == -1 && Inp_Verbose)
          Print("SignalEA push failed twice on ", _Symbol, " err(1)=", err1, " err(2)=", GetLastError());
    }
