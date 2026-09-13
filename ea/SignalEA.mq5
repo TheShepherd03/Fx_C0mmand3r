@@ -456,12 +456,25 @@ void OnTimer()
    string url = "https://" + Inp_ProjectID + "-default-rtdb.firebaseio.com/signals/" + g_AccountID + "/" + symbolKey + ".json?auth=" + g_idToken;
    char postData[]; StringToCharArray(jsonBody, postData, 0, StringLen(jsonBody));
    char resultData[]; string resultHeaders;
-   int res = WebRequest("PUT", url, "Content-Type: application/json\r\n", 5000, postData, resultData, resultHeaders);
+   // Longer timeout than the small POSTs elsewhere: this PUT carries the full
+   // multi-timeframe payload and competes with ~20 EAs hitting the same host.
+   int res = WebRequest("PUT", url, "Content-Type: application/json\r\n", 15000, postData, resultData, resultHeaders);
+   if(res == -1)
+   {
+      // Transient transport failure (timeout / connection drop). Retry once.
+      int err1 = GetLastError();
+      ResetLastError();
+      Sleep(250);
+      ArrayResize(resultData, 0);
+      res = WebRequest("PUT", url, "Content-Type: application/json\r\n", 15000, postData, resultData, resultHeaders);
+      if(res == -1 && Inp_Verbose)
+         Print("SignalEA push failed twice on ", _Symbol, " err(1)=", err1, " err(2)=", GetLastError());
+   }
 
-   if(Inp_Verbose)
+   if(Inp_Verbose && res != -1)
    {
       if(res == 200) Print("SignalEA ", _Symbol, " -> ", action, " (", confidence, "%, up=", upCount, " down=", downCount, ")");
-      else Print("SignalEA push failed: ", res, " ", CharArrayToString(resultData));
+      else Print("SignalEA push failed: HTTP ", res, " ", CharArrayToString(resultData));
    }
 }
 //+------------------------------------------------------------------+
