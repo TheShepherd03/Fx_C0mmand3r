@@ -6,6 +6,7 @@ import { ref, set, get, update } from 'firebase/database';
 import { AccountSelector } from '@/components/AccountSelector';
 import { useAccount } from '@/contexts/AccountContext';
 import { useAccountData } from '@/hooks/useAccountData';
+import { currencySymbol } from '@/utils/currency';
 import { useTheme } from '@/contexts/ThemeContext';
 import { usePrivacy } from '@/contexts/PrivacyContext';
 import * as Haptics from 'expo-haptics';
@@ -33,7 +34,8 @@ export default function CommandsScreen() {
   const losersTotal = positions
     .filter((p) => p.profit < 0)
     .reduce((sum, p) => sum + p.profit, 0);
-  const formatSigned = (n: number) => `${n >= 0 ? '+' : '-'}$${Math.abs(n).toFixed(2)}`;
+  const curSym = currencySymbol(data?.currency);
+  const formatSigned = (n: number) => `${n >= 0 ? '+' : '-'}${curSym}${Math.abs(n).toFixed(2)}`;
   // lastUpdated is the broker server-time epoch; rendered as HH:MM:SS (UTC == server clock)
   const serverTime = data?.lastUpdated
     ? new Date(data.lastUpdated * 1000).toISOString().substring(11, 19)
@@ -354,7 +356,7 @@ export default function CommandsScreen() {
               <Text style={[styles.paramSubtitle, { color: theme.colors.textSecondary }]}>Auto-close at profit</Text>
             </View>
             <View style={[styles.inputWrapper, { backgroundColor: theme.colors.input }]}>
-              <Text style={[styles.currencySymbol, { color: theme.colors.textSecondary }]}>$</Text>
+              <Text style={[styles.currencySymbol, { color: theme.colors.textSecondary }]}>{curSym}</Text>
               <TextInput
                 style={[styles.paramInput, { color: theme.colors.text }]}
                 value={dailyTarget}

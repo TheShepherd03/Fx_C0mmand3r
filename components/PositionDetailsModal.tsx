@@ -14,6 +14,7 @@ import { Position } from '@/constants/types';
 import { useTheme } from '@/contexts/ThemeContext';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { riskToSL } from '@/utils/positionMath';
+import { currencySymbol } from '@/utils/currency';
 
 interface PositionDetailsModalProps {
   position: Position | null;
@@ -22,9 +23,10 @@ interface PositionDetailsModalProps {
   onScalePosition?: (lots: number) => void;   // exact lot size to open at market
   onModifySLTP?: (ticket: number, sl: number, tp: number) => void;
   onHedge?: () => void;
+  currency?: string;   // account deposit currency (ZAR, USD, ...)
 }
 
-export function PositionDetailsModal({ position, visible, onClose, onScalePosition, onModifySLTP, onHedge }: PositionDetailsModalProps) {
+export function PositionDetailsModal({ position, visible, onClose, onScalePosition, onModifySLTP, onHedge, currency }: PositionDetailsModalProps) {
   const { theme } = useTheme();
   const [editableSL, setEditableSL] = useState('');
   const [editableTP, setEditableTP] = useState('');
@@ -193,13 +195,9 @@ export function PositionDetailsModal({ position, visible, onClose, onScalePositi
     return price.toFixed(decimals);
   };
 
+  const curSym = currencySymbol(currency);
   const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'USD',
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    }).format(amount);
+    return `${curSym}${amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   };
 
   const riskAmount = calculateRisk();
@@ -291,7 +289,7 @@ export function PositionDetailsModal({ position, visible, onClose, onScalePositi
                       styles.monetaryText,
                       { color: theme.colors.loss }
                     ]}>
-                      {editableSL && parseFloat(editableSL) > 0 ? formatCurrency(calculateSLValue()) : '$0.00'}
+                      {editableSL && parseFloat(editableSL) > 0 ? formatCurrency(calculateSLValue()) : `${curSym}0.00`}
                     </Text>
                   </View>
                 </View>
@@ -322,7 +320,7 @@ export function PositionDetailsModal({ position, visible, onClose, onScalePositi
                       styles.monetaryText,
                       { color: theme.colors.profit }
                     ]}>
-                      {editableTP && parseFloat(editableTP) > 0 ? formatCurrency(calculateTPValue()) : '$0.00'}
+                      {editableTP && parseFloat(editableTP) > 0 ? formatCurrency(calculateTPValue()) : `${curSym}0.00`}
                     </Text>
                   </View>
                 </View>

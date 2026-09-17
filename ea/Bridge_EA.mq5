@@ -670,7 +670,8 @@ void SyncAccountData()
    root.Add("margin", accInfo.Margin());
    root.Add("freeMargin", accInfo.FreeMargin());
    root.Add("marginLevel", accInfo.MarginLevel());
-   root.Add("lastUpdated", (int)TimeCurrent());
+   root.Add("currency", AccountInfoString(ACCOUNT_CURRENCY));   // deposit currency (e.g. ZAR, USD) so the app labels money correctly
+   root.Add("lastUpdated", (int)TimeGMT());   // wall-clock GMT: advances on weekends/holidays (TimeCurrent freezes when the symbol has no ticks)
    root.Add("isOnline", true);
    root.Add("isPaused", (g_EAPaused || g_EASchedulePaused));
 
@@ -705,7 +706,12 @@ void SyncAccountData()
    root.Add("positions", posArray);
 
    // --- Serialize to String ---
-   string jsonBody = root.ToString();
+   // PATCH the parent /accounts node with the account key IN THE BODY (not the URL).
+   // The account id can be ~50 chars; with the ~905-char idToken a per-account URL
+   // (/accounts/{id}.json?auth=...) reaches ~1021 chars and hits MT5's ~1024 WebRequest
+   // URL limit intermittently. Parent-node PATCH keeps the URL at ~970 chars. Firebase
+   // update() overwrites /accounts/{id} with the full object we send (same as the old PUT).
+   string jsonBody = "{\"" + g_AccountID + "\":" + root.ToString() + "}";
    delete root;
 
    // --- Send to Firestore (PATCH to update specific fields) ---
@@ -724,23 +730,57 @@ void SyncAccountData()
    // Changing strategy to Realtime DB for simplicity in MQL5
    // URL: https://{projectId}-default-rtdb.firebaseio.com/accounts/{accountId}.json?auth={apiKey}
    
-   string url = "https://" + Inp_ProjectID + "-default-rtdb.firebaseio.com/accounts/" + g_AccountID + ".json?auth=" + g_idToken;
-   
-   // Send PUT request
+   string url = "https://" + Inp_ProjectID + "-default-rtdb.firebaseio.com/accounts.json?auth=" + g_idToken;
+
+   // Send PATCH request (parent node; account key is in jsonBody)
    char postData[];
    StringToCharArray(jsonBody, postData, 0, StringLen(jsonBody));
-   
+
    char resultData[];
    string resultHeaders;
    string headers = "Content-Type: application/json\r\n";
-   
-   int res = WebRequest("PUT", url, headers, 2000, postData, resultData, resultHeaders);
-   
+
+   int res = WebRequest("PATCH", url, headers, 2000, postData, resultData, resultHeaders);
+
    if(res != 200 && Inp_Verbose)
    {
-      Print("Sync Failed. Code: ", res, " URL: ", url);
+      Print("Account sync failed. Code: ", res);
       // Print("Body: ", jsonBody);
    }
+}
+
+//+------------------------------------------------------------------+
+//| Extract the balanced {...} object that follows a key in a JSON    |
+//| string. Returns "" if the key or a complete object isn't found.   |
+//| Used to isolate one account's block from a parent-node response.  |
+//+------------------------------------------------------------------+
+string ExtractAccountBlock(string s, int keyPos)
+{
+   int brace = StringFind(s, "{", keyPos);
+   if(brace < 0) return "";
+   int depth = 0;
+   bool inStr = false;
+   int len = StringLen(s);
+   for(int i = brace; i < len; i++)
+   {
+      ushort c = StringGetCharacter(s, i);
+      if(inStr)
+      {
+         if(c == '\\') { i++; continue; }   // skip escaped char
+         if(c == '"') inStr = false;
+      }
+      else
+      {
+         if(c == '"') inStr = true;
+         else if(c == '{') depth++;
+         else if(c == '}')
+         {
+            depth--;
+            if(depth == 0) return StringSubstr(s, brace, i - brace + 1);
+         }
+      }
+   }
+   return "";
 }
 
 //+------------------------------------------------------------------+
@@ -748,20 +788,28 @@ void SyncAccountData()
 //+------------------------------------------------------------------+
 void PollCommands()
 {
-   // Check 'commands/{accountId}/latest.json'
-   string url = "https://" + Inp_ProjectID + "-default-rtdb.firebaseio.com/commands/" + g_AccountID + "/latest.json?auth=" + g_idToken;
-   
+   // Read the parent 'commands.json' node (URL ~970 chars) instead of the per-account
+   // 'commands/{id}/latest.json' (~1028, over MT5's ~1024 limit), then isolate THIS
+   // account's block so the action/status parsing below can't match another account.
+   string url = "https://" + Inp_ProjectID + "-default-rtdb.firebaseio.com/commands.json?auth=" + g_idToken;
+
    char postData[]; // Empty for GET
    char resultData[];
    string resultHeaders;
    string headers = "Content-Type: application/json\r\n";
-   
+
    int res = WebRequest("GET", url, headers, 2000, postData, resultData, resultHeaders);
-   
+
    if(res == 200)
    {
       string response = CharArrayToString(resultData);
-      
+
+      // Scope to this account's command block; bail out if it has none yet.
+      int keyPos = StringFind(response, "\"" + g_AccountID + "\"");
+      if(keyPos < 0) return;
+      response = ExtractAccountBlock(response, keyPos);
+      if(response == "") return;
+
       // Check if there is a PENDING command
       // Response ex: {"action":"CLOSE_ALL","status":"PENDING","timestamp":12345}
       if(StringFind(response, "\"status\":\"PENDING\"") > 0)
@@ -995,17 +1043,20 @@ void SyncTradeHistory()
       closedCount++;
    }
 
-   string jsonBody = root.ToString();
+   // PATCH the parent /tradeHistory node with the account key in the body to keep the URL
+   // under MT5's ~1024-char WebRequest limit (a per-account PUT reaches ~1025 and fails -1).
+   // Firebase update() overwrites /tradeHistory/{id} with the full node we send.
+   string jsonBody = "{\"" + g_AccountID + "\":" + root.ToString() + "}";
    delete root;
 
-   string url = "https://" + Inp_ProjectID + "-default-rtdb.firebaseio.com/tradeHistory/" + g_AccountID + ".json?auth=" + g_idToken;
+   string url = "https://" + Inp_ProjectID + "-default-rtdb.firebaseio.com/tradeHistory.json?auth=" + g_idToken;
    char postData[];
    StringToCharArray(jsonBody, postData, 0, StringLen(jsonBody));
    char resultData[];
    string resultHeaders;
    string headers = "Content-Type: application/json\r\n";
 
-   int res = WebRequest("PUT", url, headers, 5000, postData, resultData, resultHeaders);
+   int res = WebRequest("PATCH", url, headers, 5000, postData, resultData, resultHeaders);
    if(Inp_Verbose)
    {
       if(res == 200) Print("Trade history synced: ", closedCount, " closed trades");
@@ -1035,18 +1086,20 @@ void CloseAllPositions()
 //+------------------------------------------------------------------+
 void MarkCommandExecuted()
 {
-   string url = "https://" + Inp_ProjectID + "-default-rtdb.firebaseio.com/commands/" + g_AccountID + "/latest.json?auth=" + g_idToken;
-   string body = "{\"status\":\"EXECUTED\", \"executedAt\":" + IntegerToString(TimeCurrent()) + "}";
-   
+   // PATCH the parent /commands node using deep-path keys ("{id}/latest/status") so the URL
+   // stays ~970 chars (a per-account /commands/{id}/latest.json URL reaches ~1028, over MT5's
+   // ~1024 limit). Firebase update() with slash-separated keys updates only those leaves,
+   // leaving the command's action/ticket fields intact.
+   string url = "https://" + Inp_ProjectID + "-default-rtdb.firebaseio.com/commands.json?auth=" + g_idToken;
+   string body = "{\"" + g_AccountID + "/latest/status\":\"EXECUTED\", \""
+                       + g_AccountID + "/latest/executedAt\":" + IntegerToString(TimeGMT()) + "}";
+
    char postData[];
    StringToCharArray(body, postData, 0, StringLen(body));
    char resultData[];
    string resultHeaders;
    string headers = "Content-Type: application/json\r\n";
-   
-   // PATCH allows updating just the status/executedAt fields without wiping the rest (action/ticket)
-   // Note: If X-HTTP-Method-Override is needed for PATCH on some systems, add it. 
-   // Standard WebRequest supports PATCH if the server does. Firebase RTDB supports PATCH.
+
    WebRequest("PATCH", url, headers, 2000, postData, resultData, resultHeaders);
 }
 
@@ -2003,18 +2056,24 @@ void InitializeDefaultSettings()
 //+------------------------------------------------------------------+
 void LoadEASettings()
 {
-   string url = "https://" + Inp_ProjectID + "-default-rtdb.firebaseio.com/settings/" + g_AccountID + ".json?auth=" + g_idToken;
-   
+   // Read parent /settings node (URL ~970) instead of /settings/{id}.json (~1021, dead-zone),
+   // then isolate this account's block before parsing.
+   string url = "https://" + Inp_ProjectID + "-default-rtdb.firebaseio.com/settings.json?auth=" + g_idToken;
+
    char postData[];
    char resultData[];
    string resultHeaders;
-   
+
    int res = WebRequest("GET", url, NULL, 2000, postData, resultData, resultHeaders);
-   
+
    if(res == 200)
    {
       string response = CharArrayToString(resultData);
-      
+
+      int keyPos = StringFind(response, "\"" + g_AccountID + "\"");
+      if(keyPos >= 0)
+         response = ExtractAccountBlock(response, keyPos);
+
       if(response != "null" && StringLen(response) > 10)
       {
          // Parse JSON response and update settings

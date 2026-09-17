@@ -4,6 +4,7 @@ import { useAccountData } from '@/hooks/useAccountData';
 import { usePrivacy } from '@/contexts/PrivacyContext';
 import { useTheme } from '@/contexts/ThemeContext';
 import { totalRisk, totalPnL } from '@/utils/positionMath';
+import { currencySymbol } from '@/utils/currency';
 
 /**
  * Compact always-visible strip (rendered just above the tab bar) showing live
@@ -20,7 +21,8 @@ export function LiveStatusBar() {
   const pnl = totalPnL(positions);
   const { risk } = totalRisk(positions);
 
-  const money = (n: number) => `${n < 0 ? '-' : ''}$${Math.abs(n).toFixed(2)}`;
+  const cur = currencySymbol(data?.currency);
+  const money = (n: number) => `${n < 0 ? '-' : ''}${cur}${Math.abs(n).toFixed(2)}`;
   const MASK = '••••';
 
   return (
@@ -35,7 +37,7 @@ export function LiveStatusBar() {
       <View style={styles.cell}>
         <Text style={[styles.label, { color: theme.colors.textSecondary }]}>Risk</Text>
         <Text style={[styles.value, { color: risk > 0 ? theme.colors.loss : theme.colors.textSecondary }]}>
-          {hidden ? MASK : (risk > 0 ? `-$${risk.toFixed(2)}` : '$0.00')}
+          {hidden ? MASK : (risk > 0 ? `-${cur}${risk.toFixed(2)}` : `${cur}0.00`)}
         </Text>
       </View>
     </View>

@@ -17,6 +17,7 @@ import { PositionDetailsModal } from '@/components/PositionDetailsModal';
 import { PositionManagementModal } from '@/components/PositionManagementModal';
 import { ClosedTradeModal } from '@/components/ClosedTradeModal';
 import { useTradeHistory } from '@/hooks/useTradeHistory';
+import { currencySymbol } from '@/utils/currency';
 import { useTheme } from '@/contexts/ThemeContext';
 import { database } from '@/firebaseConfig';
 import { ref, set, onValue, off } from 'firebase/database';
@@ -27,6 +28,7 @@ interface AccountData {
   equity?: number;
   freeMargin?: number;
   marginLevel?: number;
+  currency?: string;
   positions?: Position[];
 }
 
@@ -266,8 +268,9 @@ export default function PositionsScreen() {
     }
   };
 
+  const curSym = currencySymbol(data?.currency);
   const formatCurrency = (val: number) => {
-    return `$${val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    return `${curSym}${val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   };
 
   // Price with thousands separators, preserving the instrument's decimals.
@@ -571,6 +574,7 @@ export default function PositionsScreen() {
         onScalePosition={handleScalePosition}
         onModifySLTP={handleModifySLTP}
         onHedge={handleHedgePosition}
+        currency={data?.currency}
       />
 
       <PositionManagementModal
@@ -584,6 +588,7 @@ export default function PositionsScreen() {
         trade={selectedClosedTrade}
         visible={closedModalVisible}
         onClose={() => setClosedModalVisible(false)}
+        currency={data?.currency}
       />
     </SafeAreaView>
   );

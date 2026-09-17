@@ -26,6 +26,7 @@ export interface AccountData {
   margin: number;
   freeMargin: number;
   marginLevel: number;
+  currency?: string; // deposit currency code (e.g. "ZAR", "USD") from the Bridge EA
   lastUpdated: number;
   isOnline: boolean;
   isPaused?: boolean;

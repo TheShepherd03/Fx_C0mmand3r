@@ -12,6 +12,7 @@ import { usePrivacy } from '@/contexts/PrivacyContext';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { Alert, TouchableOpacity } from 'react-native';
 import { totalRisk as computeTotalRisk } from '@/utils/positionMath';
+import { currencySymbol } from '@/utils/currency';
 
 export default function DashboardScreen() {
   const { data, loading, error, refresh } = useAccountData();
@@ -27,8 +28,9 @@ export default function DashboardScreen() {
     ]);
   };
 
+  const curSym = currencySymbol(data?.currency);
   const formatCurrency = (val: number | undefined) => {
-    return val !== undefined ? `$${val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '$0.00';
+    return val !== undefined ? `${curSym}${val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : `${curSym}0.00`;
   };
 
   const isOnline = () => {
@@ -210,7 +212,7 @@ export default function DashboardScreen() {
                   }}
                   width={Dimensions.get("window").width - 64}
                   height={220}
-                  yAxisLabel="$"
+                  yAxisLabel={curSym}
                   yAxisInterval={1}
                   segments={4}
                   formatYLabel={(y) => {

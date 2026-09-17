@@ -3,22 +3,25 @@ import { View, Text, Modal, StyleSheet, TouchableOpacity, Pressable, ScrollView 
 import { ClosedTrade } from '@/constants/types';
 import { useTheme } from '@/contexts/ThemeContext';
 import { IconSymbol } from '@/components/ui/icon-symbol';
+import { currencySymbol } from '@/utils/currency';
 
 interface ClosedTradeModalProps {
   trade: ClosedTrade | null;
   visible: boolean;
   onClose: () => void;
+  currency?: string;
 }
 
-export function ClosedTradeModal({ trade, visible, onClose }: ClosedTradeModalProps) {
+export function ClosedTradeModal({ trade, visible, onClose, currency }: ClosedTradeModalProps) {
   const { theme } = useTheme();
   if (!trade) return null;
 
   const isBuy = trade.type === 0;
   const profitColor = trade.profit >= 0 ? theme.colors.profit : theme.colors.loss;
 
+  const curSym = currencySymbol(currency);
   const money = (n: number) =>
-    `${n >= 0 ? '+' : '-'}$${Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    `${n >= 0 ? '+' : '-'}${curSym}${Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
   const dt = (unix: number) => (unix ? new Date(unix * 1000).toLocaleString() : '—');
 

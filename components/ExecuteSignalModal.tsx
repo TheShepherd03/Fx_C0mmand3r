@@ -3,6 +3,7 @@ import { View, Text, Modal, StyleSheet, TouchableOpacity, Pressable, TextInput, 
 import { Signal } from '@/constants/types';
 import { useTheme } from '@/contexts/ThemeContext';
 import { IconSymbol } from '@/components/ui/icon-symbol';
+import { currencySymbol } from '@/utils/currency';
 
 interface Props {
   signal: Signal | null;
@@ -12,10 +13,12 @@ interface Props {
   busy?: boolean;
   onClose: () => void;
   onConfirm: (lots: number, sl: number, tp: number) => void;
+  currency?: string;
 }
 
-export function ExecuteSignalModal({ signal, balance, initialLots, visible, busy, onClose, onConfirm }: Props) {
+export function ExecuteSignalModal({ signal, balance, initialLots, visible, busy, onClose, onConfirm, currency }: Props) {
   const { theme } = useTheme();
+  const curSym = currencySymbol(currency);
   const [lots, setLots] = useState('0.05');
   const [sl, setSl] = useState('');
   const [tp, setTp] = useState('');
@@ -130,7 +133,7 @@ export function ExecuteSignalModal({ signal, balance, initialLots, visible, busy
 
             {slNum > 0 && actualRisk > 0 && (
               <Text style={[styles.riskSummary, { color: theme.colors.loss }]}>
-                Risking ~${actualRisk.toFixed(2)}{balance ? `  (${riskAsPct.toFixed(2)}% of balance)` : ''}
+                Risking ~{curSym}{actualRisk.toFixed(2)}{balance ? `  (${riskAsPct.toFixed(2)}% of balance)` : ''}
               </Text>
             )}
 

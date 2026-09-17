@@ -454,6 +454,7 @@ export default function SignalsScreen() {
       <ExecuteSignalModal
         signal={execSignal}
         balance={acctData?.balance}
+        currency={acctData?.currency}
         initialLots={execSignal ? lotFor(execSignal) : undefined}
         visible={execVisible}
         busy={execSignal ? executingIds.has(execSignal.id) : false}
