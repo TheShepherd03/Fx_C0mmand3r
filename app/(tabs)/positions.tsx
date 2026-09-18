@@ -609,6 +609,7 @@ export default function PositionsScreen() {
         visible={managementModalVisible}
         onClose={() => setManagementModalVisible(false)}
         onUpdate={handleManagementUpdate}
+        currency={data?.currency}
       />
 
       <ClosedTradeModal

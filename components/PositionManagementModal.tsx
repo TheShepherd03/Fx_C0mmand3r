@@ -17,19 +17,22 @@ import { useAccount } from '@/contexts/AccountContext';
 import { database } from '@/firebaseConfig';
 import { ref, set } from 'firebase/database';
 import { IconSymbol } from '@/components/ui/icon-symbol';
+import { currencySymbol } from '@/utils/currency';
 
 interface PositionManagementModalProps {
   visible: boolean;
   position: Position | null;
   onClose: () => void;
   onUpdate: () => void;
+  currency?: string;
 }
 
 export function PositionManagementModal({
   visible,
   position,
   onClose,
-  onUpdate
+  onUpdate,
+  currency
 }: PositionManagementModalProps) {
   const { theme } = useTheme();
   const { selectedAccount } = useAccount();
@@ -203,7 +206,7 @@ export function PositionManagementModal({
               {position.symbol} #{position.ticket}
             </Text>
             <Text style={[styles.subtitle, { color: profitColor }]}>
-              {position.type === 0 ? 'BUY' : 'SELL'} {position.lots} lots • ${position.profit.toFixed(2)}
+              {position.type === 0 ? 'BUY' : 'SELL'} {position.lots} lots • {currencySymbol(currency)}{position.profit.toFixed(2)}
             </Text>
           </View>
           <TouchableOpacity
