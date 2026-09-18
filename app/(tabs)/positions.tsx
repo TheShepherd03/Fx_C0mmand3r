@@ -185,17 +185,23 @@ export default function PositionsScreen() {
     }
   };
 
-  const handleHedgePosition = async () => {
+  // Hedge = an opposite-direction position on the same symbol. The modal supplies the
+  // lot size (multiplier or manual) and the SL/TP prices (defaulted to the original's
+  // distances mirrored to the opposite side, or overridden manually). sl/tp of 0 = none.
+  const handleHedgePosition = async (lots: number, sl: number, tp: number) => {
     if (!selectedAccount || !selectedPosition) return;
+    const hedgeLots = Math.max(0.01, Math.round(lots * 100) / 100);
+    if (!hedgeLots || isNaN(hedgeLots)) { Alert.alert("Error", "Enter a valid hedge lot size."); return; }
+    const hedgeType = selectedPosition.type === 0 ? 1 : 0; // opposite direction
 
     try {
       const command = {
         action: 'OPEN_POSITION',
         symbol: selectedPosition.symbol,
-        type: selectedPosition.type === 0 ? 1 : 0, // opposite direction
-        lots: selectedPosition.lots,
-        sl: 0,
-        tp: 0,
+        type: hedgeType,
+        lots: hedgeLots,
+        sl: sl > 0 ? sl : 0,
+        tp: tp > 0 ? tp : 0,
         status: 'PENDING',
         timestamp: Math.floor(Date.now() / 1000)
       };
@@ -205,42 +211,14 @@ export default function PositionsScreen() {
 
       Alert.alert(
         "Success",
-        `Hedge sent: ${selectedPosition.type === 0 ? 'SELL' : 'BUY'} ${selectedPosition.lots} ${selectedPosition.symbol} at market.`
+        `Hedge sent: ${hedgeType === 0 ? 'BUY' : 'SELL'} ${hedgeLots} ${selectedPosition.symbol} at market` +
+          `${sl > 0 ? `, SL ${sl}` : ''}${tp > 0 ? `, TP ${tp}` : ''}.`
       );
       setModalVisible(false);
     } catch (error) {
       console.error('Hedge command error:', error);
       Alert.alert("Error", `Failed to send hedge command: ${error}`);
     }
-  };
-
-  const handleCloseAll = () => {
-    Alert.alert(
-      "Close All Positions",
-      "Are you sure you want to close all open positions?",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Close All",
-          style: "destructive",
-          onPress: async () => {
-            if (!selectedAccount || !data?.positions) return;
-
-            try {
-              const commandRef = ref(database, `commands/${selectedAccount}/latest`);
-              await set(commandRef, {
-                action: 'CLOSE_ALL',
-                status: 'PENDING',
-                timestamp: Math.floor(Date.now() / 1000)
-              });
-              Alert.alert("Success", "Close all command sent.");
-            } catch {
-              Alert.alert("Error", "Failed to send close all command.");
-            }
-          }
-        }
-      ]
-    );
   };
 
   const handleManagePosition = (position: Position) => {
@@ -489,18 +467,7 @@ export default function PositionsScreen() {
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.background }]}>
-      {/* Header (title removed — bottom nav shows the screen). Close All stays right. */}
-      <View style={[styles.header, { justifyContent: 'flex-end' }]}>
-        {data?.positions && data.positions.length > 0 && (
-          <TouchableOpacity
-            style={[styles.closeAllBtn, { backgroundColor: theme.colors.error + '20', borderColor: theme.colors.error }]}
-            onPress={handleCloseAll}
-          >
-            <IconSymbol name="exclamationmark.triangle.fill" size={14} color={theme.colors.error} />
-            <Text style={[styles.closeAllText, { color: theme.colors.error }]}>Close All</Text>
-          </TouchableOpacity>
-        )}
-      </View>
+      {/* Close All lives on the Trade Control screen (Kill Switch); no duplicate here. */}
 
       {/* Summary Cards */}
       <View style={styles.summaryContainer}>

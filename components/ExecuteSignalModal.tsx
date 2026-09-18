@@ -12,7 +12,7 @@ interface Props {
   visible: boolean;
   busy?: boolean;
   onClose: () => void;
-  onConfirm: (lots: number, sl: number, tp: number) => void;
+  onConfirm: (lots: number, sl: number, tp: number, orderKind: 'market' | 'stop', entry: number) => void;
   currency?: string;
 }
 
@@ -23,6 +23,9 @@ export function ExecuteSignalModal({ signal, balance, initialLots, visible, busy
   const [sl, setSl] = useState('');
   const [tp, setTp] = useState('');
   const [riskPct, setRiskPct] = useState('1');
+  // 'market' fills now; 'stop' places a pending stop at the trigger `entry` price.
+  const [orderKind, setOrderKind] = useState<'market' | 'stop'>('market');
+  const [entry, setEntry] = useState('');
 
   const canSize = !!(signal && signal.tickValue && signal.tickSize && signal.tickSize > 0 && signal.sl > 0 && balance);
 
@@ -44,6 +47,8 @@ export function ExecuteSignalModal({ signal, balance, initialLots, visible, busy
     if (signal) {
       setSl(signal.sl > 0 ? String(signal.sl) : '');
       setTp(signal.tp > 0 ? String(signal.tp) : '');
+      setOrderKind('market');
+      setEntry(signal.price > 0 ? String(signal.price) : '');
       if (initialLots && initialLots > 0) {
         // Respect the lot the user already dialled in on the card.
         setLots(String(initialLots));
@@ -76,7 +81,12 @@ export function ExecuteSignalModal({ signal, balance, initialLots, visible, busy
   const riskAsPct = actualRisk && balance ? (actualRisk / balance) * 100 : 0;
 
   const isBuy = signal.action === 'BUY';
-  const confirm = () => onConfirm(parseFloat(lots) || 0, parseFloat(sl) || 0, parseFloat(tp) || 0);
+  const entryNum = parseFloat(entry) || 0;
+  const confirm = () => onConfirm(parseFloat(lots) || 0, parseFloat(sl) || 0, parseFloat(tp) || 0, orderKind, entryNum);
+  // A stop enters on breakout: BUY stop above price, SELL stop below.
+  const stopDirHint = isBuy
+    ? 'Buy Stop — fills when price rises to the trigger.'
+    : 'Sell Stop — fills when price falls to the trigger.';
 
   return (
     <Modal animationType="slide" transparent visible={visible} onRequestClose={onClose}>
@@ -96,6 +106,28 @@ export function ExecuteSignalModal({ signal, balance, initialLots, visible, busy
                 <IconSymbol name="xmark" size={16} color={theme.colors.textSecondary} />
               </TouchableOpacity>
             </View>
+
+            {/* Order type: Market (now) vs Stop (pending at trigger) */}
+            <View style={[styles.kindRow, { backgroundColor: theme.colors.input }]}>
+              {(['market', 'stop'] as const).map((k) => (
+                <TouchableOpacity
+                  key={k}
+                  style={[styles.kindBtn, orderKind === k && { backgroundColor: theme.colors.primary }]}
+                  onPress={() => setOrderKind(k)}
+                >
+                  <Text style={[styles.kindText, { color: orderKind === k ? '#fff' : theme.colors.textSecondary }]}>
+                    {k === 'market' ? 'Market' : 'Stop'}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            {orderKind === 'stop' && (
+              <>
+                <Text style={[styles.note, { color: theme.colors.textTertiary, marginBottom: 8 }]}>{stopDirHint}</Text>
+                <Field label="Entry (trigger price)" value={entry} onChange={setEntry} theme={theme} />
+              </>
+            )}
 
             {/* Risk sizing */}
             {canSize ? (
@@ -142,7 +174,9 @@ export function ExecuteSignalModal({ signal, balance, initialLots, visible, busy
               onPress={confirm}
               disabled={busy}
             >
-              <Text style={styles.confirmText}>{busy ? 'Sending…' : `Execute ${signal.action}`}</Text>
+              <Text style={styles.confirmText}>
+                {busy ? 'Sending…' : orderKind === 'stop' ? `Place ${signal.action} Stop` : `Execute ${signal.action}`}
+              </Text>
             </TouchableOpacity>
           </ScrollView>
         </View>
@@ -176,6 +210,9 @@ const styles = StyleSheet.create({
   title: { fontSize: 22, fontWeight: 'bold' },
   sub: { fontSize: 14, marginTop: 2, fontWeight: '600' },
   close: { width: 30, height: 30, borderRadius: 15, justifyContent: 'center', alignItems: 'center' },
+  kindRow: { flexDirection: 'row', borderRadius: 10, padding: 4, marginBottom: 12, gap: 4 },
+  kindBtn: { flex: 1, paddingVertical: 9, borderRadius: 7, alignItems: 'center' },
+  kindText: { fontSize: 14, fontWeight: '700' },
   riskBox: { borderRadius: 12, padding: 12, marginBottom: 12 },
   riskLabel: { fontSize: 13, fontWeight: '600', marginBottom: 8 },
   riskRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },

@@ -22,7 +22,7 @@ interface PositionDetailsModalProps {
   onClose: () => void;
   onScalePosition?: (lots: number) => void;   // exact lot size to open at market
   onModifySLTP?: (ticket: number, sl: number, tp: number) => void;
-  onHedge?: () => void;
+  onHedge?: (lots: number, sl: number, tp: number) => void;  // opposite position with its own lots + SL/TP
   currency?: string;   // account deposit currency (ZAR, USD, ...)
 }
 
@@ -32,6 +32,11 @@ export function PositionDetailsModal({ position, visible, onClose, onScalePositi
   const [editableTP, setEditableTP] = useState('');
   const [hasChanges, setHasChanges] = useState(false);
   const [scaleLots, setScaleLots] = useState('');
+  // Hedge (opposite position) — its own lot size and SL/TP, defaulted to the
+  // original's distances mirrored to the opposite side.
+  const [hedgeLots, setHedgeLots] = useState('');
+  const [hedgeSL, setHedgeSL] = useState('');
+  const [hedgeTP, setHedgeTP] = useState('');
 
   // Initialize editable values when position changes
   useEffect(() => {
@@ -39,6 +44,19 @@ export function PositionDetailsModal({ position, visible, onClose, onScalePositi
       setEditableSL(position.sl > 0 ? position.sl.toString() : '');
       setEditableTP(position.tp > 0 ? position.tp.toString() : '');
       setHasChanges(false);
+
+      // Hedge defaults: 1x lots, and SL/TP at the same DISTANCE as the original
+      // but on the opposite side of the current price (the hedge fills at market).
+      const dec = position.symbol.includes('JPY') ? 3 : 5;
+      const ref = position.currentPrice > 0 ? position.currentPrice : position.openPrice;
+      const slDist = position.sl > 0 ? Math.abs(position.openPrice - position.sl) : 0;
+      const tpDist = position.tp > 0 ? Math.abs(position.tp - position.openPrice) : 0;
+      const hedgeIsBuy = position.type === 1; // opposite of the original
+      const defSL = slDist > 0 ? (hedgeIsBuy ? ref - slDist : ref + slDist) : 0;
+      const defTP = tpDist > 0 ? (hedgeIsBuy ? ref + tpDist : ref - tpDist) : 0;
+      setHedgeLots(position.lots.toString());
+      setHedgeSL(defSL > 0 ? defSL.toFixed(dec) : '');
+      setHedgeTP(defTP > 0 ? defTP.toFixed(dec) : '');
     }
   }, [position]);
 
@@ -450,17 +468,83 @@ export function PositionDetailsModal({ position, visible, onClose, onScalePositi
               <View style={[styles.section, { borderTopColor: theme.colors.border }]}>
                 <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>Hedge</Text>
                 <Text style={[styles.scalingDesc, { color: theme.colors.textSecondary }]}>
-                  Open an opposite {position.type === 0 ? 'SELL' : 'BUY'} position of {position.lots} lot{position.lots === 1 ? '' : 's'} to hedge this trade
+                  Open an opposite {position.type === 0 ? 'SELL' : 'BUY'} position. SL/TP default to this trade&apos;s
+                  distances, mirrored to the other side — adjust with the multipliers or type your own.
                 </Text>
+
+                {/* Lot size: multiplier of the original position + manual */}
+                <View style={styles.scalingButtons}>
+                  {[1, 1.5, 2, 3].map((factor) => {
+                    const lots = (position.lots * factor).toFixed(2);
+                    const active = Math.abs(parseFloat(hedgeLots || '0') - position.lots * factor) < 0.005;
+                    return (
+                      <TouchableOpacity
+                        key={factor}
+                        style={[
+                          styles.scaleButton,
+                          { backgroundColor: theme.colors.input, borderColor: active ? theme.colors.warning : theme.colors.border },
+                        ]}
+                        onPress={() => setHedgeLots(lots)}
+                      >
+                        <Text style={[styles.scaleButtonText, { color: theme.colors.warning }]}>{factor}x</Text>
+                        <Text style={[styles.scaleButtonLots, { color: theme.colors.textSecondary }]}>{lots} lots</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+
+                {/* Manual lot / SL / TP */}
+                <View style={styles.hedgeInputRow}>
+                  <View style={styles.hedgeField}>
+                    <Text style={[styles.hedgeFieldLabel, { color: theme.colors.textSecondary }]}>Lots</Text>
+                    <TextInput
+                      style={[styles.hedgeFieldInput, { backgroundColor: theme.colors.input, color: theme.colors.text, borderColor: theme.colors.border }]}
+                      value={hedgeLots}
+                      onChangeText={setHedgeLots}
+                      keyboardType="numeric"
+                      placeholder="0.00"
+                      placeholderTextColor={theme.colors.textTertiary}
+                    />
+                  </View>
+                  <View style={styles.hedgeField}>
+                    <Text style={[styles.hedgeFieldLabel, { color: theme.colors.textSecondary }]}>Stop Loss</Text>
+                    <TextInput
+                      style={[styles.hedgeFieldInput, { backgroundColor: theme.colors.input, color: theme.colors.text, borderColor: theme.colors.border }]}
+                      value={hedgeSL}
+                      onChangeText={setHedgeSL}
+                      keyboardType="numeric"
+                      placeholder="none"
+                      placeholderTextColor={theme.colors.textTertiary}
+                    />
+                  </View>
+                  <View style={styles.hedgeField}>
+                    <Text style={[styles.hedgeFieldLabel, { color: theme.colors.textSecondary }]}>Take Profit</Text>
+                    <TextInput
+                      style={[styles.hedgeFieldInput, { backgroundColor: theme.colors.input, color: theme.colors.text, borderColor: theme.colors.border }]}
+                      value={hedgeTP}
+                      onChangeText={setHedgeTP}
+                      keyboardType="numeric"
+                      placeholder="none"
+                      placeholderTextColor={theme.colors.textTertiary}
+                    />
+                  </View>
+                </View>
+
                 <TouchableOpacity
                   style={[styles.hedgeButton, { backgroundColor: theme.colors.warning + '22', borderColor: theme.colors.warning }]}
                   onPress={() => {
+                    const lots = Math.round((parseFloat(hedgeLots) || 0) * 100) / 100;
+                    const sl = parseFloat(hedgeSL) || 0;
+                    const tp = parseFloat(hedgeTP) || 0;
+                    if (!(lots > 0)) { Alert.alert('Invalid lots', 'Enter a hedge lot size greater than 0.'); return; }
+                    const dir = position.type === 0 ? 'SELL' : 'BUY';
                     Alert.alert(
                       'Hedge Position',
-                      `Open an opposite ${position.type === 0 ? 'SELL' : 'BUY'} ${position.lots} lot ${position.symbol} position at market price?`,
+                      `Open ${dir} ${lots.toFixed(2)} lot ${position.symbol} at market` +
+                        `${sl > 0 ? `\nSL: ${sl}` : ''}${tp > 0 ? `\nTP: ${tp}` : ''}?`,
                       [
                         { text: 'Cancel', style: 'cancel' },
-                        { text: 'Hedge', onPress: onHedge },
+                        { text: 'Hedge', onPress: () => onHedge(lots, sl, tp) },
                       ]
                     );
                   }}
@@ -797,9 +881,31 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     borderRadius: 10,
     borderWidth: 1,
+    marginTop: 12,
   },
   hedgeButtonText: {
     fontSize: 15,
     fontWeight: '700',
+  },
+  hedgeInputRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 10,
+  },
+  hedgeField: {
+    flex: 1,
+  },
+  hedgeFieldLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    marginBottom: 5,
+  },
+  hedgeFieldInput: {
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    fontSize: 14,
+    fontFamily: 'monospace',
   },
 });

@@ -18,15 +18,14 @@ export default function CommandsScreen() {
   const { theme } = useTheme();
   const { statusBarEnabled, toggleStatusBar, notificationsEnabled, toggleNotifications } = usePrivacy();
 
-  // State
-  const [autoTrading, setAutoTrading] = useState(true);
-  const [hedgeMode, setHedgeMode] = useState(false);
   // Global break-even applied to trades opened while enabled (price move % from entry)
   const [globalBreakevenEnabled, setGlobalBreakevenEnabled] = useState(false);
   const [globalBreakevenPercent, setGlobalBreakevenPercent] = useState('0.5');
   const [dailyTarget, setDailyTarget] = useState('2500');
   // Live values derived from the selected account's real-time data
   const isPaused = data?.isPaused ?? false;
+  // Auto-Trading reflects the EA's live run state (paused = not allowing new trades)
+  const autoTrading = !isPaused;
   const positions = data?.positions ?? [];
   const winnersTotal = positions
     .filter((p) => p.profit > 0)
@@ -101,6 +100,23 @@ export default function CommandsScreen() {
     sendCommand('SET_EA_PAUSE', { immediate: false });
   };
 
+  // Auto-Trading toggle drives the same EA pause state as Pause/Resume:
+  // OFF = pause new trades (existing positions stay open + managed); ON = resume.
+  const toggleAutoTrading = (val: boolean) => {
+    if (val) {
+      sendCommand('SET_EA_PAUSE', { immediate: false });
+    } else {
+      Alert.alert(
+        'Disable Auto-Trading',
+        'Stop the EA from opening new trades? Open positions stay live and managed.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Disable', style: 'destructive', onPress: () => sendCommand('SET_EA_PAUSE', { immediate: true, pauseDuration: 86400, pauseMode: 0 }) }
+        ]
+      );
+    }
+  };
+
   const handleKillSwitch = () => {
     Alert.alert(
       "⚠️ KILL SWITCH ACTIVATED",
@@ -113,7 +129,6 @@ export default function CommandsScreen() {
           onPress: () => {
             Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
             sendCommand('KILL_SWITCH');
-            setAutoTrading(false);
           }
         }
       ]
@@ -173,34 +188,20 @@ export default function CommandsScreen() {
         <View style={styles.grid}>
           <View style={[styles.toggleCard, { backgroundColor: theme.colors.card }]}>
             <View style={styles.toggleHeader}>
-              <View style={[styles.iconBox, { backgroundColor: theme.colors.primary }]}>
-                <IconSymbol name="cpu" size={20} color="#FFF" />
+              <View style={[styles.iconBox, { backgroundColor: autoTrading ? theme.colors.primary : theme.colors.input }]}>
+                <IconSymbol name="cpu" size={20} color={autoTrading ? '#FFF' : theme.colors.textSecondary} />
               </View>
               <Switch
                 value={autoTrading}
-                onValueChange={setAutoTrading}
+                onValueChange={toggleAutoTrading}
                 trackColor={{ false: theme.colors.input, true: theme.colors.primary }}
                 thumbColor="#FFF"
               />
             </View>
             <Text style={[styles.toggleTitle, { color: theme.colors.text }]}>Auto-Trading</Text>
-            <Text style={[styles.toggleDesc, { color: theme.colors.textSecondary }]}>Allow EA to open trades</Text>
-          </View>
-
-          <View style={[styles.toggleCard, { backgroundColor: theme.colors.card }]}>
-            <View style={styles.toggleHeader}>
-              <View style={[styles.iconBox, { backgroundColor: theme.colors.input }]}>
-                <IconSymbol name="arrow.triangle.2.circlepath" size={20} color={theme.colors.textSecondary} />
-              </View>
-              <Switch
-                value={hedgeMode}
-                onValueChange={setHedgeMode}
-                trackColor={{ false: theme.colors.input, true: theme.colors.primary }}
-                thumbColor="#FFF"
-              />
-            </View>
-            <Text style={[styles.toggleTitle, { color: theme.colors.text }]}>Hedge Mode</Text>
-            <Text style={[styles.toggleDesc, { color: theme.colors.textSecondary }]}>Simultaneous positions</Text>
+            <Text style={[styles.toggleDesc, { color: theme.colors.textSecondary }]}>
+              {autoTrading ? 'EA is opening trades' : 'EA paused — no new trades'}
+            </Text>
           </View>
         </View>
 

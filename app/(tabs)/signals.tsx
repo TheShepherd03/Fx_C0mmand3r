@@ -111,23 +111,29 @@ export default function SignalsScreen() {
     setExecVisible(true);
   };
 
-  // Called from the confirm sheet with the chosen lots/SL/TP
-  const doExecute = async (lots: number, sl: number, tp: number) => {
+  // Called from the confirm sheet with the chosen lots/SL/TP.
+  // orderKind 'market' fills now (type 0/1); 'stop' places a pending stop at `entry`
+  // (type 2=BUY_STOP above price, 3=SELL_STOP below price).
+  const doExecute = async (lots: number, sl: number, tp: number, orderKind: 'market' | 'stop' = 'market', entry = 0) => {
     if (!selectedAccount || !execSignal) return;
     const signal = execSignal;
+    const isBuy = signal.action === 'BUY';
+    const type = orderKind === 'stop' ? (isBuy ? 2 : 3) : (isBuy ? 0 : 1);
     setExecutingIds(prev => new Set([...prev, signal.id]));
     try {
       const commandRef = ref(database, `commands/${selectedAccount}/latest`);
-      await set(commandRef, {
+      const command: any = {
         action: 'OPEN_POSITION',
         symbol: signal.symbol,
-        type: signal.action === 'BUY' ? 0 : 1,
+        type,
         lots,
         sl,
         tp,
         status: 'PENDING',
         timestamp: Math.floor(Date.now() / 1000)
-      });
+      };
+      if (orderKind === 'stop') command.price = entry;   // trigger price for the pending order
+      await set(commandRef, command);
       setActedIds(prev => new Set(prev).add(signal.id));   // hide locally; EA owns the node
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
       setExecVisible(false);
@@ -158,6 +164,17 @@ export default function SignalsScreen() {
     if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
     if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
     return new Date(timestamp * 1000).toLocaleDateString();
+  };
+
+  // Countdown for discrete signals that carry an expiry (recomputed on each re-render;
+  // signal cards re-render on the EA's live price pushes, so it stays fresh).
+  const expiryLabel = (expiresAt?: number) => {
+    if (!expiresAt) return '';
+    const secs = expiresAt - Math.floor(Date.now() / 1000);
+    if (secs <= 0) return 'expired';
+    if (secs < 60) return `expires in ${secs}s`;
+    if (secs < 3600) return `expires in ${Math.floor(secs / 60)}m`;
+    return `expires in ${Math.floor(secs / 3600)}h`;
   };
 
   const sources = Array.from(new Set(signals.map(s => s.source).filter(Boolean))).sort();
@@ -256,6 +273,7 @@ export default function SignalsScreen() {
               </View>
               <Text style={[styles.metaText, { color: theme.colors.textSecondary }]}>
                 {item.source || 'Signal Feed'} • {formatTime(item.timestamp)}
+                {item.expiresAt ? ` • ${expiryLabel(item.expiresAt)}` : ''}
               </Text>
             </View>
           </View>

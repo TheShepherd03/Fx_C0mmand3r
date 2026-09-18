@@ -127,6 +127,8 @@ void SyncAccountData();
 void PollCommands();
 void SyncHistory();
 void CloseAllPositions();
+void ClosePositionsByProfit(bool winners);
+void DeletePendingOrders();
 void MarkCommandExecuted();
 void ExecuteOpenPosition(string response);
 
@@ -840,6 +842,30 @@ void PollCommands()
                MarkCommandExecuted();
             }
          }
+         else if(StringFind(response, "\"action\":\"CLOSE_PROFITABLE\"") > 0)
+         {
+            if(Inp_AllowClose)
+            {
+               ClosePositionsByProfit(true);   // close winners
+               MarkCommandExecuted();
+            }
+         }
+         else if(StringFind(response, "\"action\":\"CLOSE_LOSING\"") > 0)
+         {
+            if(Inp_AllowClose)
+            {
+               ClosePositionsByProfit(false);  // close losers
+               MarkCommandExecuted();
+            }
+         }
+         else if(StringFind(response, "\"action\":\"DELETE_PENDING\"") > 0)
+         {
+            if(Inp_AllowClose)
+            {
+               DeletePendingOrders();
+               MarkCommandExecuted();
+            }
+         }
          else if(StringFind(response, "\"action\":\"CLOSE_TICKET\"") > 0)
          {
              // Extract ticket
@@ -1097,6 +1123,45 @@ void CloseAllPositions()
 }
 
 //+------------------------------------------------------------------+
+//| Close only winning (profit>0) or only losing (profit<0) positions|
+//+------------------------------------------------------------------+
+void ClosePositionsByProfit(bool winners)
+{
+   Print("Closing ", (winners ? "PROFITABLE" : "LOSING"), " positions");
+   int total = PositionsTotal();
+   for(int i=total-1; i>=0; i--)
+   {
+      if(posInfo.SelectByIndex(i))
+      {
+         double pl = posInfo.Profit() + posInfo.Swap() + posInfo.Commission();
+         if((winners && pl > 0) || (!winners && pl < 0))
+         {
+            trade.PositionClose(posInfo.Ticket());
+            Sleep(100);
+         }
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Delete all pending orders                                         |
+//+------------------------------------------------------------------+
+void DeletePendingOrders()
+{
+   Print("Deleting all pending orders");
+   int total = OrdersTotal();
+   for(int i=total-1; i>=0; i--)
+   {
+      ulong ticket = OrderGetTicket(i);
+      if(ticket > 0)
+      {
+         trade.OrderDelete(ticket);
+         Sleep(100);
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
 //| Acknowledge Command                                               |
 //+------------------------------------------------------------------+
 void MarkCommandExecuted()
@@ -1129,11 +1194,12 @@ void ExecuteOpenPosition(string response)
    // Expected format: {"action":"OPEN_POSITION","symbol":"EURUSD","type":0,"lots":0.01,"sl":0,"tp":0,"status":"PENDING","timestamp":12345}
    
    string symbol = "";
-   int orderType = 0;
+   int orderType = 0;   // 0=BUY, 1=SELL (market); 2=BUY_STOP, 3=SELL_STOP, 4=BUY_LIMIT, 5=SELL_LIMIT (pending)
    double lots = 0.01;
    double sl = 0;
    double tp = 0;
-   
+   double price = 0;    // trigger price for pending orders (ignored for market)
+
    // Extract symbol
    int symbolPos = StringFind(response, "\"symbol\":\"");
    if(symbolPos > 0)
@@ -1195,11 +1261,46 @@ void ExecuteOpenPosition(string response)
       if(endPos > 0)
          tp = StringToDouble(StringSubstr(temp, 0, endPos));
    }
-   
-   // Validate parameters
-   if(symbol == "" || lots <= 0)
+
+   // Extract trigger price (pending orders only). "price": won't match "openPrice"/"currentPrice".
+   int pricePos = StringFind(response, "\"price\":");
+   if(pricePos > 0)
    {
-      Print("Invalid OPEN_POSITION parameters: symbol=", symbol, ", lots=", lots);
+      string temp = StringSubstr(response, pricePos + 8);
+      int commaPos = StringFind(temp, ",");
+      int bracePos = StringFind(temp, "}");
+      int endPos = commaPos;
+      if(bracePos < commaPos || commaPos == -1) endPos = bracePos;
+      if(endPos > 0)
+         price = StringToDouble(StringSubstr(temp, 0, endPos));
+   }
+
+   // Validate symbol
+   if(symbol == "")
+   {
+      Print("Invalid OPEN_POSITION: missing symbol");
+      return;
+   }
+
+   // --- Normalize volume to the symbol's constraints ---
+   // Signals sometimes carry an invalid lot (0, below min, or off the broker's step).
+   // Instead of rejecting the trade, snap it to the symbol's minimum / nearest step.
+   double volMin  = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
+   double volMax  = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
+   double volStep = SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP);
+   if(lots <= 0 || (volMin > 0 && lots < volMin))
+   {
+      Print("Lot size ", lots, " invalid/below min for ", symbol, " - using minimum ", volMin);
+      lots = (volMin > 0 ? volMin : 0.01);
+   }
+   if(volStep > 0) lots = MathRound(lots / volStep) * volStep;   // snap to the broker's lot step
+   if(volMin > 0 && lots < volMin) lots = volMin;
+   if(volMax > 0 && lots > volMax) lots = volMax;
+   int lotDigits = (volStep >= 1 ? 0 : (volStep >= 0.1 ? 1 : (volStep >= 0.01 ? 2 : 3)));
+   lots = NormalizeDouble(lots, lotDigits);
+   if(lots <= 0)
+   {
+      Print("Could not derive a valid lot size for ", symbol, " - skipping");
       return;
    }
    
@@ -1213,6 +1314,37 @@ void ExecuteOpenPosition(string response)
    // Min SL/TP distance: broker stops level, but at least a few spreads for fast
    // synthetics, plus a small buffer.
    double minDist = MathMax((double)stopsLv * point, spread * 3.0) + 10 * point;
+
+   // --- Pending stop/limit orders (orderType >= 2): place at a trigger price and return ---
+   // 2 = BUY_STOP (above ask), 3 = SELL_STOP (below bid), 4 = BUY_LIMIT (below bid), 5 = SELL_LIMIT (above ask)
+   if(orderType >= 2)
+   {
+      if(price <= 0) { Print("Pending order needs a trigger price. Skipping ", symbol); return; }
+      bool pIsBuy = (orderType == 2 || orderType == 4);
+      double trig = price;
+      // Keep the trigger a valid distance from current price for its kind
+      if(orderType == 2 && trig < ask + minDist) trig = ask + minDist; // BUY_STOP must sit above ask
+      if(orderType == 3 && trig > bid - minDist) trig = bid - minDist; // SELL_STOP must sit below bid
+      if(orderType == 4 && trig > bid - minDist) trig = bid - minDist; // BUY_LIMIT must sit below bid
+      if(orderType == 5 && trig < ask + minDist) trig = ask + minDist; // SELL_LIMIT must sit above ask
+      trig = NormalizeDouble(trig, digits);
+      // Clamp SL/TP to a valid distance from the TRIGGER price (not current price)
+      double psl = sl, ptp = tp;
+      if(pIsBuy) { if(psl > 0 && psl > trig - minDist) psl = trig - minDist; if(ptp > 0 && ptp < trig + minDist) ptp = trig + minDist; }
+      else       { if(psl > 0 && psl < trig + minDist) psl = trig + minDist; if(ptp > 0 && ptp > trig - minDist) ptp = trig - minDist; }
+      if(psl > 0) psl = NormalizeDouble(psl, digits);
+      if(ptp > 0) ptp = NormalizeDouble(ptp, digits);
+
+      bool okPend = false;
+      if(orderType == 2)      okPend = trade.BuyStop(lots, trig, symbol, psl, ptp, ORDER_TIME_GTC, 0, "FX Commander");
+      else if(orderType == 3) okPend = trade.SellStop(lots, trig, symbol, psl, ptp, ORDER_TIME_GTC, 0, "FX Commander");
+      else if(orderType == 4) okPend = trade.BuyLimit(lots, trig, symbol, psl, ptp, ORDER_TIME_GTC, 0, "FX Commander");
+      else if(orderType == 5) okPend = trade.SellLimit(lots, trig, symbol, psl, ptp, ORDER_TIME_GTC, 0, "FX Commander");
+
+      if(okPend) Print("Pending order placed: type=", orderType, " ", symbol, " @ ", trig, " SL=", psl, " TP=", ptp);
+      else       Print("Pending order failed. Retcode: ", trade.ResultRetcode(), " - ", trade.ResultRetcodeDescription());
+      return;
+   }
 
    // --- 1) Re-validate the signal: has price already hit its SL/TP? ---
    if(orderType == 0) // BUY, fills at ask

@@ -107,7 +107,7 @@ export default function DashboardScreen() {
               </Text>
               <View style={[styles.percentBadge, { backgroundColor: isProfit ? theme.colors.buyBackground : theme.colors.sellBackground }]}>
                 <Text style={[styles.percentText, { color: isProfit ? theme.colors.profit : theme.colors.loss }]}>
-                  {balancesHidden ? mask('') : `${totalPL >= 0 ? '+' : ''}${plPercent.toFixed(2)}% Today`}
+                  {balancesHidden ? mask('') : `${totalPL >= 0 ? '+' : ''}${plPercent.toFixed(2)}% of balance`}
                 </Text>
               </View>
             </View>
