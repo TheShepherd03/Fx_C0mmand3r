@@ -44,6 +44,12 @@ export default function PositionsScreen() {
   const [managementModalVisible, setManagementModalVisible] = useState(false);
   const [managementPosition, setManagementPosition] = useState<Position | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  // ticks once a second so per-position time-limit countdowns update smoothly
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
 
   // Active vs closed-trade history view
   const [viewMode, setViewMode] = useState<'active' | 'history'>('active');
@@ -287,6 +293,16 @@ export default function PositionsScreen() {
         : (item.sl - item.currentPrice) / (item.sl - item.tp);
       tpPct = Math.max(0, Math.min(1, raw)) * 100;
     }
+    // per-position auto-close timer countdown (EA sends timeLimit seconds after openTime)
+    const timerRemaining = (item.timeLimit && item.timeLimit > 0 && item.openTime)
+      ? (item.openTime + item.timeLimit) - Math.floor(now / 1000)
+      : null;
+    const fmtRemaining = (secs: number) => {
+      if (secs <= 0) return 'closing…';
+      const h = Math.floor(secs / 3600), m = Math.floor((secs % 3600) / 60), s = secs % 60;
+      return h > 0 ? `${h}h ${m}m` : (m > 0 ? `${m}m ${s}s` : `${s}s`);
+    };
+    const timerColor = timerRemaining !== null && timerRemaining <= 300 ? theme.colors.loss : theme.colors.warning;
     return (
     <TouchableOpacity
       style={[styles.positionCard, { backgroundColor: theme.colors.card }]}
@@ -328,13 +344,24 @@ export default function PositionsScreen() {
           </Text>
           <View style={styles.badgesRow}>
             {item.breakevenEnabled && (
-              <View style={[styles.miniBadge, { backgroundColor: theme.colors.input }]}>
-                <Text style={[styles.miniBadgeText, { color: theme.colors.textSecondary }]}>BE Active</Text>
+              <View style={[styles.miniBadge, { backgroundColor: theme.colors.success + '22' }]}>
+                <Text style={[styles.miniBadgeText, { color: theme.colors.success }]}>
+                  {item.breakevenTriggered ? 'BE ✓' : 'BE'}
+                </Text>
               </View>
             )}
-            {item.tp > 0 && (
-              <View style={[styles.miniBadge, { backgroundColor: theme.colors.input }]}>
-                <Text style={[styles.miniBadgeText, { color: theme.colors.info }]}>TP Set</Text>
+            {item.trailingEnabled && (
+              <View style={[styles.miniBadge, { backgroundColor: theme.colors.info + '22' }]}>
+                <Text style={[styles.miniBadgeText, { color: theme.colors.info }]}>
+                  TRAIL {item.trailingPercentage ?? 20}%
+                </Text>
+              </View>
+            )}
+            {timerRemaining !== null && (
+              <View style={[styles.miniBadge, { backgroundColor: timerColor + '22' }]}>
+                <Text style={[styles.miniBadgeText, { color: timerColor }]}>
+                  ⏱ {fmtRemaining(timerRemaining)}
+                </Text>
               </View>
             )}
           </View>

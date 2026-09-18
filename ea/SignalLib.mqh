@@ -43,6 +43,7 @@ struct SL_Tracked
    double   tp;
    datetime expiresAt;
    string   status;     // last status pushed to Firebase (pending / winning)
+   datetime lastLivePush; // throttle for currentPrice pushes
 };
 SL_Tracked g_sl_tracked[];
 
@@ -334,6 +335,7 @@ bool PublishSignal(string symbol, string action, double entry, double sl, double
    o.Add("symbol",     symbol);
    o.Add("action",     action);
    o.Add("price",      NormalizeDouble(entry, digits));
+   o.Add("currentPrice", NormalizeDouble(entry, digits)); // seeded at entry; prune loop keeps it live
    o.Add("sl",         NormalizeDouble(sl, digits));
    o.Add("tp",         NormalizeDouble(tp, digits));
    o.Add("lots",       lots);
@@ -377,6 +379,7 @@ bool PublishSignal(string symbol, string action, double entry, double sl, double
       g_sl_tracked[idx].tp        = tp;
       g_sl_tracked[idx].expiresAt = (datetime)(TimeCurrent() + expirySeconds);
       g_sl_tracked[idx].status    = "pending";
+      g_sl_tracked[idx].lastLivePush = 0;   // 0 => first prune pushes live price immediately
       Print("Signal published: ", source, " ", symbol, " ", action, " @", entry);
       // Push-notify only the first time this setup appears (not on re-publishes).
       if(isNew)
@@ -408,10 +411,12 @@ void SignalLib_Delete(string key)
 //| Update just the status field of a published signal (winning /     |
 //| pending), via a multi-path PATCH on the parent (short URL).        |
 //+------------------------------------------------------------------+
-void SignalLib_SetStatus(string key, string status)
+void SignalLib_SetStatus(string key, string status, double currentPrice, int digits)
 {
    string url = "https://" + g_sl_projectId + "-default-rtdb.firebaseio.com/signals/" + g_sl_accountId + ".json?auth=" + g_sl_idToken;
-   string body = "{\"" + key + "/status\":\"" + status + "\"}";
+   // multi-path PATCH: update this signal's status AND live price so the app can
+   // draw a "where is price now" progress bar between entry/SL/TP. Short URL.
+   string body = "{\"" + key + "/status\":\"" + status + "\",\"" + key + "/currentPrice\":" + DoubleToString(currentPrice, digits) + "}";
    char post[]; StringToCharArray(body, post, 0, StringLen(body));
    char res[]; string hdr;
    WebRequest("PATCH", url, "Content-Type: application/json\r\n", 5000, post, res, hdr);
@@ -471,10 +476,15 @@ void SignalLib_Prune()
          if(g_sl_tracked[i].action == "BUY"  && px > e) want = "winning";
          if(g_sl_tracked[i].action == "SELL" && px < e) want = "winning";
       }
-      if(want != g_sl_tracked[i].status)
+      // Push status + live price when status flips, or every ~4s to keep the
+      // app's price-progress bar fresh without flooding WebRequest.
+      bool statusChanged = (want != g_sl_tracked[i].status);
+      if(statusChanged || (now - g_sl_tracked[i].lastLivePush) >= 4)
       {
-         SignalLib_SetStatus(g_sl_tracked[i].key, want);
+         int sdig = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
+         SignalLib_SetStatus(g_sl_tracked[i].key, want, px, sdig);
          g_sl_tracked[i].status = want;
+         g_sl_tracked[i].lastLivePush = now;
       }
    }
 }

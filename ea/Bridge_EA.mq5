@@ -700,6 +700,21 @@ void SyncAccountData()
          // and synthetic indices without hard-coded contract sizes.
          p.Add("tickValue", SymbolInfoDouble(posInfo.Symbol(), SYMBOL_TRADE_TICK_VALUE));
          p.Add("tickSize",  SymbolInfoDouble(posInfo.Symbol(), SYMBOL_TRADE_TICK_SIZE));
+
+         // Per-position management state so the app can PERSIST + DISPLAY what's active
+         // (break-even, trailing, time limit). Without this the app always shows them "off".
+         int mgi = FindPositionManagement((long)posInfo.Ticket());
+         if(mgi >= 0)
+         {
+            p.Add("breakevenEnabled",    g_PosManagement[mgi].breakevenEnabled);
+            p.Add("breakevenUsePercent", g_PosManagement[mgi].breakevenUsePercent);
+            p.Add("breakevenPercent",    g_PosManagement[mgi].breakevenPercent);
+            p.Add("breakevenThreshold",  g_PosManagement[mgi].breakevenThreshold);
+            p.Add("breakevenTriggered",  g_PosManagement[mgi].breakevenTriggered);
+            p.Add("trailingEnabled",     g_PosManagement[mgi].trailingEnabled);
+            p.Add("trailingPercentage",  g_PosManagement[mgi].trailingPercentage);
+            p.Add("timeLimit",           (int)g_PosManagement[mgi].timeLimit); // seconds after openTime; app counts down
+         }
          posArray.Add(p);
       }
    }

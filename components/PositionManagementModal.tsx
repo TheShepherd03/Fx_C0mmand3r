@@ -56,13 +56,21 @@ export function PositionManagementModal({
   // Time management settings
   const [timeLimit, setTimeLimit] = useState('');
 
+  // Initialise the controls from the EA's CURRENT per-position state, but only when
+  // the sheet opens (or the ticket changes) — not on every price tick, which would
+  // otherwise clobber edits the user is making before they hit Save.
   useEffect(() => {
-    if (position) {
+    if (visible && position) {
       setBreakevenEnabled(position.breakevenEnabled || false);
+      setBreakevenMode(position.breakevenUsePercent ? 'percent' : 'pips');
+      if (position.breakevenThreshold && position.breakevenThreshold > 0) setBreakevenThreshold(String(position.breakevenThreshold));
+      if (position.breakevenPercent && position.breakevenPercent > 0) setBreakevenPercent(String(position.breakevenPercent));
       setTrailingEnabled(position.trailingEnabled || false);
       setTrailingPercentage(position.trailingPercentage || 20);
+      setTimeLimit(position.timeLimit && position.timeLimit > 0 ? String(Math.round(position.timeLimit / 3600)) : '');
     }
-  }, [position]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, position?.ticket]);
 
   const sendCommand = async (action: string, payload: any) => {
     if (!selectedAccount) {

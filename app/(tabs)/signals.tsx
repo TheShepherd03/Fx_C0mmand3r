@@ -219,6 +219,24 @@ export default function SignalsScreen() {
 
     const symbolColor = getSymbolColor(item.symbol);
 
+    // Where is price now, between SL and TP, and relative to the signal's entry?
+    // Lets the trader judge: enter now (near entry), chase (moved toward TP), or wait.
+    const hasLevels = item.sl > 0 && item.tp > 0;
+    const cur = (item.currentPrice && item.currentPrice > 0) ? item.currentPrice : item.price;
+    let pricePct: number | null = null;
+    let entryPct: number | null = null;
+    if (hasLevels) {
+      const span = isBuy ? (item.tp - item.sl) : (item.sl - item.tp);
+      if (span !== 0) {
+        const pos = (p: number) => (isBuy ? (p - item.sl) : (item.sl - p)) / span;
+        pricePct = Math.max(0, Math.min(1, pos(cur))) * 100;
+        entryPct = Math.max(0, Math.min(1, pos(item.price))) * 100;
+      }
+    }
+    const drift = pricePct !== null && entryPct !== null ? pricePct - entryPct : 0;
+    const priceHint = Math.abs(drift) < 6 ? 'near entry — good to enter'
+                    : drift > 0 ? 'moved toward TP — chasing' : 'pulled toward SL — can wait';
+
     return (
       <View style={[styles.card, { backgroundColor: theme.colors.card }]}>
         {/* Header */}
@@ -311,6 +329,29 @@ export default function SignalsScreen() {
             </View>
           </View>
         </View>
+
+        {/* Price position: where price sits between SL and TP, vs the signal's entry */}
+        {hasLevels && pricePct !== null && entryPct !== null && (
+          <View style={styles.progWrap}>
+            <View style={styles.progLabels}>
+              <Text style={[styles.progEnd, { color: theme.colors.loss }]}>SL</Text>
+              <Text style={[styles.progNow, { color: theme.colors.text }]}>{cur.toFixed(5)}</Text>
+              <Text style={[styles.progEnd, { color: theme.colors.profit }]}>TP</Text>
+            </View>
+            <View style={[styles.progTrack, { backgroundColor: theme.colors.input }]}>
+              {/* entry reference tick */}
+              <View style={[styles.entryTick, { left: `${entryPct}%`, backgroundColor: theme.colors.textSecondary }]} />
+              {/* live price marker */}
+              <View style={[styles.priceMarker, {
+                left: `${pricePct}%`,
+                backgroundColor: drift > 0 ? theme.colors.profit : (drift < -6 ? theme.colors.loss : theme.colors.text),
+              }]} />
+            </View>
+            <Text style={[styles.progHint, { color: theme.colors.textTertiary }]}>
+              Entry {item.price.toFixed(5)} • {priceHint}
+            </Text>
+          </View>
+        )}
 
         {/* Actions (live signals are actionable whether pending or already winning) */}
         {(isPending || isWinning) && (
@@ -468,6 +509,51 @@ export default function SignalsScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+  },
+  // Signal price-position bar (SL <- entry/price -> TP)
+  progWrap: {
+    marginTop: 12,
+  },
+  progLabels: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 6,
+  },
+  progEnd: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  progNow: {
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  progTrack: {
+    height: 6,
+    borderRadius: 3,
+    position: 'relative',
+    justifyContent: 'center',
+  },
+  entryTick: {
+    position: 'absolute',
+    width: 2,
+    height: 14,
+    borderRadius: 1,
+    marginLeft: -1,
+    opacity: 0.9,
+  },
+  priceMarker: {
+    position: 'absolute',
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    marginLeft: -5,
+    borderWidth: 2,
+    borderColor: '#00000030',
+  },
+  progHint: {
+    fontSize: 11,
+    marginTop: 6,
+    textAlign: 'center',
   },
   header: {
     padding: 16,

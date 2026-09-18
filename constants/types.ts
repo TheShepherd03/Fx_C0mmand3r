@@ -13,11 +13,15 @@ export interface Position {
   // Contract specs from the EA for accurate money math (money = priceDiff / tickSize * tickValue * lots)
   tickValue?: number;
   tickSize?: number;
-  // Position management status
+  // Position management status (synced from the EA so the app can persist + display it)
   breakevenEnabled?: boolean;
   breakevenTriggered?: boolean;
+  breakevenUsePercent?: boolean;
+  breakevenPercent?: number;
+  breakevenThreshold?: number;
   trailingEnabled?: boolean;
   trailingPercentage?: number;
+  timeLimit?: number; // seconds after openTime; 0/undefined = no auto-close timer
 }
 
 export interface AccountData {
@@ -76,6 +80,7 @@ export interface Signal {
   symbol: string;
   action: 'BUY' | 'SELL';
   price: number;
+  currentPrice?: number;  // live price from the EA, for the entry->SL/TP progress bar
   sl: number;
   tp: number;
   lots: number;

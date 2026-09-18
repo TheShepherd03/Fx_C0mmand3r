@@ -457,6 +457,7 @@ void OnTimer()
    root.Add("symbol", _Symbol);
    root.Add("action", action);
    root.Add("price", NormalizeDouble(price, digits));
+   root.Add("currentPrice", NormalizeDouble(price, digits)); // live price (EMA signal is trade-at-market)
    // ATR-based SL/TP so EMA signals aren't stop-less when executed
    double atrVal = 0; { double _ab[]; if(CopyBuffer(g_atr, 0, 1, 1, _ab) > 0) atrVal = _ab[0]; }
    double slv = 0, tpv = 0;
