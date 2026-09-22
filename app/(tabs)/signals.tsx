@@ -129,6 +129,7 @@ export default function SignalsScreen() {
         lots,
         sl,
         tp,
+        entry,   // signal's intended entry — lets the EA re-anchor SL/TP to the fill (preserve R:R on market orders)
         status: 'PENDING',
         timestamp: Math.floor(Date.now() / 1000)
       };
