@@ -21,6 +21,8 @@ const MAPPING: IconMapping = {
   'list.bullet': 'list',
   'antenna.radiowaves.left.and.right': 'settings-input-antenna',
   'bolt.fill': 'flash-on',
+  'calendar': 'event',
+  'newspaper': 'article',
   'arrow.left': 'arrow-back',
   'xmark': 'close',
   'gear': 'settings',
