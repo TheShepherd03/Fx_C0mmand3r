@@ -40,6 +40,25 @@ CTrade         trade;
 CPositionInfo  posInfo;
 CAccountInfo   accInfo;
 
+//+------------------------------------------------------------------+
+//| Deposit-currency money per one SYMBOL_TRADE_TICK_SIZE move for a  |
+//| 1.0 lot, via OrderCalcProfit. Currency-correct for index/CFDs     |
+//| where raw SYMBOL_TRADE_TICK_VALUE is unconverted (e.g. USA30 on a |
+//| ZAR account returns 0.1 instead of the real ~1.6).                |
+//+------------------------------------------------------------------+
+double FXC_MoneyPerTick(string symbol)
+{
+   double ts = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE);
+   double px = SymbolInfoDouble(symbol, SYMBOL_BID);
+   if(px <= 0) px = SymbolInfoDouble(symbol, SYMBOL_ASK);
+   if(px <= 0) px = SymbolInfoDouble(symbol, SYMBOL_LAST);
+   double loss = 0.0;
+   if(ts > 0 && px > 0 &&
+      OrderCalcProfit(ORDER_TYPE_BUY, symbol, 1.0, px, px - ts, loss) && loss != 0.0)
+      return MathAbs(loss);
+   return SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE); // fallback
+}
+
 // Signal reception variables
 datetime       g_lastSignalCheck = 0;
 datetime       g_lastSignalTime = 0;
@@ -700,7 +719,7 @@ void SyncAccountData()
          // Contract specs so the app can convert price distance -> money accurately
          // (money = priceDiff / tickSize * tickValue * lots). Works for FX, metals,
          // and synthetic indices without hard-coded contract sizes.
-         p.Add("tickValue", SymbolInfoDouble(posInfo.Symbol(), SYMBOL_TRADE_TICK_VALUE));
+         p.Add("tickValue", FXC_MoneyPerTick(posInfo.Symbol()));   // deposit-currency, index-CFD safe
          p.Add("tickSize",  SymbolInfoDouble(posInfo.Symbol(), SYMBOL_TRADE_TICK_SIZE));
 
          // Per-position management state so the app can PERSIST + DISPLAY what's active
@@ -1199,6 +1218,7 @@ void ExecuteOpenPosition(string response)
    double sl = 0;
    double tp = 0;
    double price = 0;    // trigger price for pending orders (ignored for market)
+   double entry = 0;    // the signal's intended entry (used to preserve R:R on market fills)
 
    // Extract symbol
    int symbolPos = StringFind(response, "\"symbol\":\"");
@@ -1273,6 +1293,19 @@ void ExecuteOpenPosition(string response)
       if(bracePos < commaPos || commaPos == -1) endPos = bracePos;
       if(endPos > 0)
          price = StringToDouble(StringSubstr(temp, 0, endPos));
+   }
+
+   // Extract the signal's intended entry (for R:R preservation on market fills).
+   int entryPos = StringFind(response, "\"entry\":");
+   if(entryPos > 0)
+   {
+      string temp = StringSubstr(response, entryPos + 8);
+      int commaPos = StringFind(temp, ",");
+      int bracePos = StringFind(temp, "}");
+      int endPos = commaPos;
+      if(bracePos < commaPos || commaPos == -1) endPos = bracePos;
+      if(endPos > 0)
+         entry = StringToDouble(StringSubstr(temp, 0, endPos));
    }
 
    // Validate symbol
@@ -1356,6 +1389,22 @@ void ExecuteOpenPosition(string response)
    {
       if(sl > 0 && bid >= sl) { Print("Signal no longer valid (price at/above SL). Skipping ", symbol); return; }
       if(tp > 0 && bid <= tp) { Print("Signal no longer valid (price at/below TP). Skipping ", symbol); return; }
+   }
+
+   // --- 1.5) Re-anchor SL/TP to the actual fill so a MARKET order PRESERVES the
+   //          signal's risk:reward. If price "chased" away from the signal entry,
+   //          keeping fixed SL/TP inverts R:R (you can lose more than you gain).
+   //          Shifting both by (fill - entry) keeps the original SL/TP DISTANCES. ---
+   if(entry > 0.0)
+   {
+      double fill  = (orderType == 0) ? ask : bid;
+      double shift = fill - entry;
+      if(sl > 0) sl += shift;
+      if(tp > 0) tp += shift;
+      if(MathAbs(shift) > point)
+         Print("Re-anchored SL/TP by ", DoubleToString(shift, digits),
+               " (signal entry ", DoubleToString(entry, digits),
+               " -> fill ", DoubleToString(fill, digits), ") to preserve R:R");
    }
 
    // --- 2) Clamp SL/TP to the broker's minimum distance from the CURRENT price ---

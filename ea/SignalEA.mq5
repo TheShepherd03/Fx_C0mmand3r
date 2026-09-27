@@ -255,6 +255,23 @@ void NotifyNewSignal(string title, string body)
 }
 
 //+------------------------------------------------------------------+
+//| Deposit-currency money per one SYMBOL_TRADE_TICK_SIZE move for a  |
+//| 1.0 lot (OrderCalcProfit) — index-CFD/currency-correct.           |
+//+------------------------------------------------------------------+
+double FXC_MoneyPerTick(string symbol)
+{
+   double ts = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE);
+   double px = SymbolInfoDouble(symbol, SYMBOL_BID);
+   if(px <= 0) px = SymbolInfoDouble(symbol, SYMBOL_ASK);
+   if(px <= 0) px = SymbolInfoDouble(symbol, SYMBOL_LAST);
+   double loss = 0.0;
+   if(ts > 0 && px > 0 &&
+      OrderCalcProfit(ORDER_TYPE_BUY, symbol, 1.0, px, px - ts, loss) && loss != 0.0)
+      return MathAbs(loss);
+   return SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE);
+}
+
+//+------------------------------------------------------------------+
 //| Unique account id: Company_Server_AccountNumber                   |
 //+------------------------------------------------------------------+
 string GenerateAccountID()
@@ -470,7 +487,7 @@ void OnTimer()
    root.Add("sl", (slv > 0) ? NormalizeDouble(slv, digits) : 0);
    root.Add("tp", (tpv > 0) ? NormalizeDouble(tpv, digits) : 0);
    root.Add("lots", Inp_SignalLots);
-   root.Add("tickValue", SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE));
+   root.Add("tickValue", FXC_MoneyPerTick(_Symbol));   // deposit-currency, index-CFD safe
    root.Add("tickSize",  SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE));
    root.Add("source", "EMA Engine");
    root.Add("confidence", confidence);
@@ -479,7 +496,7 @@ void OnTimer()
    root.Add("upCount", upCount);
    root.Add("downCount", downCount);
    root.Add("status", status);
-   root.Add("timestamp", (int)TimeCurrent());
+   root.Add("timestamp", (int)TimeGMT());   // UTC for correct app "X ago"
    root.Add("cycles", cyclesArr);
 
    string jsonBody = root.ToString();

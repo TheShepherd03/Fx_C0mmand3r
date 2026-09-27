@@ -325,6 +325,26 @@ void SignalLib_Notify(string title, string body)
 //| Publish a discrete signal (appends via POST). true on HTTP 200.   |
 //|  action: "BUY" or "SELL"; expirySeconds: how long it stays live.  |
 //+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+//| Deposit-currency money per one SYMBOL_TRADE_TICK_SIZE move for a  |
+//| 1.0 lot, via OrderCalcProfit. Currency-correct for index/CFDs     |
+//| where raw SYMBOL_TRADE_TICK_VALUE is unconverted (e.g. USA30 on a |
+//| ZAR account returns 0.1 instead of the real ~1.6). Falls back to  |
+//| the raw tick value only if OrderCalcProfit can't run.             |
+//+------------------------------------------------------------------+
+double SignalLib_MoneyPerTick(string symbol)
+{
+   double ts = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE);
+   double px = SymbolInfoDouble(symbol, SYMBOL_BID);
+   if(px <= 0) px = SymbolInfoDouble(symbol, SYMBOL_ASK);
+   if(px <= 0) px = SymbolInfoDouble(symbol, SYMBOL_LAST);
+   double loss = 0.0;
+   if(ts > 0 && px > 0 &&
+      OrderCalcProfit(ORDER_TYPE_BUY, symbol, 1.0, px, px - ts, loss) && loss != 0.0)
+      return MathAbs(loss);
+   return SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE); // fallback
+}
+
 bool PublishSignal(string symbol, string action, double entry, double sl, double tp,
                    double lots, string source, int confidence, int expirySeconds)
 {
@@ -339,13 +359,13 @@ bool PublishSignal(string symbol, string action, double entry, double sl, double
    o.Add("sl",         NormalizeDouble(sl, digits));
    o.Add("tp",         NormalizeDouble(tp, digits));
    o.Add("lots",       lots);
-   o.Add("tickValue",  SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE));
+   o.Add("tickValue",  SignalLib_MoneyPerTick(symbol));   // deposit-currency, index-CFD safe
    o.Add("tickSize",   SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE));
    o.Add("source",     source);
    o.Add("confidence", confidence);
    o.Add("status",     "pending");
-   o.Add("timestamp",  (int)TimeCurrent());
-   o.Add("expiresAt",  (int)(TimeCurrent() + expirySeconds));
+   o.Add("timestamp",  (int)TimeGMT());                   // UTC so the app's "X ago" is correct
+   o.Add("expiresAt",  (int)(TimeGMT() + expirySeconds)); // (TimeCurrent = broker time, ahead of UTC on HFM)
    string body = o.ToString();
    delete o;
 
