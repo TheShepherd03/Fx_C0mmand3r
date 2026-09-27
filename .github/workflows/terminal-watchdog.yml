@@ -1,0 +1,32 @@
+name: Terminal watchdog
+
+# Pushes to your phone when an MT5 terminal's heartbeat goes quiet (and when it
+# recovers), even if the PC is off. Needs repository secrets FIREBASE_EMAIL and
+# FIREBASE_PASSWORD (Settings > Secrets and variables > Actions).
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: terminal-watchdog
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts/cloud
+      - name: Check terminal heartbeats
+        run: node scripts/cloud/terminal-watchdog.mjs
+        env:
+          FIREBASE_EMAIL: ${{ secrets.FIREBASE_EMAIL }}
+          FIREBASE_PASSWORD: ${{ secrets.FIREBASE_PASSWORD }}
+          FIREBASE_API_KEY: AIzaSyCA3LUdogLeo7wdHEfxfPQtG4EG2SqEFtg
+          FIREBASE_DB_URL: https://c0mmand3r-default-rtdb.firebaseio.com
