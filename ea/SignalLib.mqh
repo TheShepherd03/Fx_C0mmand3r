@@ -44,8 +44,16 @@ struct SL_Tracked
    datetime expiresAt;
    string   status;     // last status pushed to Firebase (pending / winning)
    datetime lastLivePush; // throttle for currentPrice pushes
+   string   source;     // publishing strategy (for the outcome log / scorecard)
+   string   tag;        // optional sub-type, e.g. Zones confirmation "sweep"
+   int      confidence;
+   datetime openedAt;   // UTC; when this setup first appeared
 };
 SL_Tracked g_sl_tracked[];
+
+// --- Notification preferences (prefs/signals), cached --------------------
+string   g_sl_prefs     = "";   // raw JSON of prefs/signals ("" = none / defaults)
+datetime g_sl_prefsAt   = 0;
 
 //+------------------------------------------------------------------+
 //| Extract a value for `key` from raw JSON (quoted or bare).         |
@@ -110,7 +118,7 @@ bool SignalLib_SignIn()
    g_sl_refreshToken = SignalLib_ExtractJson(resp, "refreshToken");
    int expSec = (int)StringToInteger(SignalLib_ExtractJson(resp, "expiresIn"));
    if(expSec <= 0) expSec = 3600;
-   g_sl_tokenExpiry = TimeCurrent() + expSec - 300;
+   g_sl_tokenExpiry = TimeGMT() + expSec - 300;
    if(g_sl_idToken == "") return false;
    return true;
 }
@@ -133,7 +141,7 @@ bool SignalLib_Refresh()
    if(rt != "") g_sl_refreshToken = rt;
    int expSec = (int)StringToInteger(SignalLib_ExtractJson(resp, "expires_in"));
    if(expSec <= 0) expSec = 3600;
-   g_sl_tokenExpiry = TimeCurrent() + expSec - 300;
+   g_sl_tokenExpiry = TimeGMT() + expSec - 300;
    if(g_sl_idToken == "") return SignalLib_SignIn();
    return true;
 }
@@ -164,7 +172,7 @@ bool SignalLib_ReadSharedToken()
    }
    if(gc < 3) return false;
    datetime exp = (datetime)StringToInteger(good[2]);
-   if(TimeCurrent() >= exp - 60) return false;   // stale / about to expire
+   if(TimeGMT() >= exp - 60) return false;   // stale / about to expire
    g_sl_idToken      = good[0];
    g_sl_refreshToken = good[1];
    g_sl_tokenExpiry  = exp;
@@ -189,7 +197,7 @@ void SignalLib_WriteSharedToken()
 bool SignalLib_EnsureAuth()
 {
    if(g_sl_noAuth) return true;   // bypass: publish unauthenticated (open rules)
-   datetime now = TimeCurrent();
+   datetime now = TimeGMT();
    if(g_sl_idToken != "" && now < g_sl_tokenExpiry) return true;
    // Another EA may already have a fresh token cached in the shared file.
    if(SignalLib_ReadSharedToken()) return true;
@@ -273,7 +281,7 @@ bool SignalLib_Init(string projectId, string apiKey, string email, string passwo
    else
    {
       MathSrand((int)(GetMicrosecondCount() + TimeLocal()));       // unique per EA instance
-      g_sl_lastAuthAttempt = TimeCurrent() + (MathRand() % 120);   // future => EnsureAuth waits, staggered
+      g_sl_lastAuthAttempt = TimeGMT() + (MathRand() % 120);   // future => EnsureAuth waits, staggered
       ok = false;
       Print("SignalLib init for account ", g_sl_accountId, " (auth deferred, staggered)");
    }
@@ -284,30 +292,119 @@ bool SignalLib_Init(string projectId, string apiKey, string email, string passwo
 //| Send one Expo push message to a device token.                     |
 //| Requires https://exp.host whitelisted in Tools>Options>Experts.   |
 //+------------------------------------------------------------------+
-void SignalLib_SendExpoPush(string token, string title, string body)
+string SignalLib_JsonEsc(string s)
+{
+   StringReplace(s, "\\", "\\\\");
+   StringReplace(s, "\"", "\\\"");
+   return s;
+}
+
+// Firebase key form of a symbol (matches the app: [ .$#[]/] -> "_").
+string SignalLib_SymbolKey(string s)
+{
+   StringReplace(s, " ", "_"); StringReplace(s, ".", "_"); StringReplace(s, "$", "_");
+   StringReplace(s, "#", "_"); StringReplace(s, "[", "_"); StringReplace(s, "]", "_");
+   StringReplace(s, "/", "_");
+   return s;
+}
+
+// `data` is a raw JSON object string for the app's deep link, e.g.
+// {"screen":"zones","symbol":"...","account":"<id>"} (app switches to that account), or "".
+void SignalLib_SendExpoPush(string token, string title, string body, string data = "")
 {
    string url = "https://exp.host/--/api/v2/push/send";
-   string payload = "{\"to\":\"" + token + "\",\"title\":\"" + title +
-                    "\",\"body\":\"" + body + "\",\"sound\":\"default\",\"channelId\":\"signals\",\"priority\":\"high\"}";
-   char post[]; StringToCharArray(payload, post, 0, StringLen(payload));
+   string payload = "{\"to\":\"" + token + "\",\"title\":\"" + SignalLib_JsonEsc(title) +
+                    "\",\"body\":\"" + SignalLib_JsonEsc(body) +
+                    "\",\"sound\":\"default\",\"channelId\":\"signals\",\"priority\":\"high\"" +
+                    (data != "" ? ",\"data\":" + data : "") + "}";
+   char post[]; StringToCharArray(payload, post, 0, StringLen(payload), CP_UTF8);
    char res[]; string hdr;
    WebRequest("POST", url, "Content-Type: application/json\r\n", 5000, post, res, hdr);
 }
 
 //+------------------------------------------------------------------+
-//| Push a "new signal" alert to every device token registered for   |
-//| this account (pushTokens/{account}). Best-effort; ignores errors. |
+//| Notification preferences (prefs/signals, written by the app):     |
+//|  sources.<Src>.notify=false, mutedSymbols.<symKey>=true, and      |
+//|  quiet {enabled,start,end (minutes of the user's local day),      |
+//|  tzOffsetMin}. Reloaded at most once a minute.                    |
 //+------------------------------------------------------------------+
-void SignalLib_Notify(string title, string body)
+void SignalLib_LoadPrefs()
 {
+   if(g_sl_prefsAt > 0 && TimeGMT() - g_sl_prefsAt < 60) return;
+   g_sl_prefsAt = TimeGMT();
    if(!SignalLib_EnsureAuth()) return;
-   string url = "https://" + g_sl_projectId + "-default-rtdb.firebaseio.com/pushTokens/" + g_sl_accountId + ".json?auth=" + g_sl_idToken;
+   string url = "https://" + g_sl_projectId + "-default-rtdb.firebaseio.com/prefs/signals.json?auth=" + g_sl_idToken;
+   char post[]; char res[]; string hdr;
+   if(WebRequest("GET", url, NULL, 3000, post, res, hdr) == 200)
+   {
+      string s = CharArrayToString(res, 0, WHOLE_ARRAY, CP_UTF8);
+      g_sl_prefs = (s == "null") ? "" : s;
+   }
+}
+
+// The JSON object that is the value of "key" (first occurrence), or "".
+string SignalLib_ObjectFor(string json, string key)
+{
+   int p = StringFind(json, "\"" + key + "\":{");
+   if(p < 0) return "";
+   int s = StringFind(json, "{", p);
+   int depth = 0;
+   for(int i = s; i < StringLen(json); i++)
+   {
+      ushort c = StringGetCharacter(json, i);
+      if(c == '{') depth++;
+      else if(c == '}') { depth--; if(depth == 0) return StringSubstr(json, s, i - s + 1); }
+   }
+   return "";
+}
+
+bool SignalLib_NotifyAllowed(string source, string symbol)
+{
+   SignalLib_LoadPrefs();
+   if(g_sl_prefs == "") return true;
+   if(source != "")
+   {
+      // keyed like symbols: "Supply/Demand" is stored as "Supply_Demand"
+      string so = SignalLib_ObjectFor(SignalLib_ObjectFor(g_sl_prefs, "sources"), SignalLib_SymbolKey(source));
+      if(so != "" && StringFind(so, "\"notify\":false") >= 0) return false;
+   }
+   if(symbol != "")
+   {
+      string muted = SignalLib_ObjectFor(g_sl_prefs, "mutedSymbols");
+      if(muted != "" && StringFind(muted, "\"" + SignalLib_SymbolKey(symbol) + "\":true") >= 0) return false;
+   }
+   string q = SignalLib_ObjectFor(g_sl_prefs, "quiet");
+   if(q != "" && StringFind(q, "\"enabled\":true") >= 0)
+   {
+      int st  = (int)StringToInteger(SignalLib_ExtractJson(q, "start"));
+      int en  = (int)StringToInteger(SignalLib_ExtractJson(q, "end"));
+      int off = (int)StringToInteger(SignalLib_ExtractJson(q, "tzOffsetMin"));
+      long local = (long)TimeGMT() + (long)off * 60;
+      int mins = (int)(((local % 86400) + 86400) % 86400 / 60);
+      bool quiet = (st <= en) ? (mins >= st && mins < en) : (mins >= st || mins < en); // wraps midnight
+      if(quiet) return false;
+   }
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| Push an alert to every registered device, unless the user's prefs |
+//| mute this source/symbol or it's quiet hours. Reads the parent     |
+//| pushTokens node: the per-account URL hits MQL's ~1024-char        |
+//| WebRequest limit with long account ids (HFM) and failed silently. |
+//+------------------------------------------------------------------+
+void SignalLib_NotifyFor(string source, string symbol, string title, string body, string data = "")
+{
+   if(!SignalLib_NotifyAllowed(source, symbol)) return;
+   if(!SignalLib_EnsureAuth()) return;
+   string url = "https://" + g_sl_projectId + "-default-rtdb.firebaseio.com/pushTokens.json?auth=" + g_sl_idToken;
    char post[]; char res[]; string hdr;
    int r = WebRequest("GET", url, NULL, 3000, post, res, hdr);
    if(r != 200) return;
    string resp = CharArrayToString(res);
    if(resp == "null" || StringLen(resp) < 12) return;   // no tokens registered
-   // Extract each "ExponentPushToken[...]" occurrence and notify it.
+   // Every "ExponentPushToken[...]" once (the same phone is registered per account).
+   string sent = "|";
    int pos = 0;
    while(true)
    {
@@ -316,9 +413,18 @@ void SignalLib_Notify(string title, string body)
       int e = StringFind(resp, "]", s);
       if(e < 0) break;
       string token = StringSubstr(resp, s, e - s + 1);
-      SignalLib_SendExpoPush(token, title, body);
+      if(StringFind(sent, "|" + token + "|") < 0)
+      {
+         SignalLib_SendExpoPush(token, title, body, data);
+         sent += token + "|";
+      }
       pos = e + 1;
    }
+}
+
+void SignalLib_Notify(string title, string body)
+{
+   SignalLib_NotifyFor("", "", title, body, "");
 }
 
 //+------------------------------------------------------------------+
@@ -346,7 +452,8 @@ double SignalLib_MoneyPerTick(string symbol)
 }
 
 bool PublishSignal(string symbol, string action, double entry, double sl, double tp,
-                   double lots, string source, int confidence, int expirySeconds)
+                   double lots, string source, int confidence, int expirySeconds,
+                   string tag = "")   // optional sub-type, e.g. Zones confirmation "sweep"
 {
    if(!SignalLib_EnsureAuth()) { Print("SignalLib: no auth, skipping signal"); return false; }
 
@@ -363,6 +470,7 @@ bool PublishSignal(string symbol, string action, double entry, double sl, double
    o.Add("tickSize",   SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE));
    o.Add("source",     source);
    o.Add("confidence", confidence);
+   if(tag != "") o.Add("tag", tag);
    o.Add("status",     "pending");
    o.Add("timestamp",  (int)TimeGMT());                   // UTC so the app's "X ago" is correct
    o.Add("expiresAt",  (int)(TimeGMT() + expirySeconds)); // (TimeCurrent = broker time, ahead of UTC on HFM)
@@ -371,15 +479,17 @@ bool PublishSignal(string symbol, string action, double entry, double sl, double
 
    // Deterministic key per (source, symbol): a restart overwrites the SAME node
    // instead of orphaning it, and there's at most one live signal per symbol per
-   // source (no unbounded accumulation). PATCH-upsert on the parent keeps the URL
-   // short (the ~905-char token would push a per-key PUT URL past MQL's ~1024 limit).
+   // source (no unbounded accumulation). Replacing the whole node also clears the
+   // app's dismissed/snoozedUntil flags, so a NEW setup always shows again.
    string key = source + "_" + symbol;
    StringReplace(key, ".", "_"); StringReplace(key, "$", "_"); StringReplace(key, "#", "_");
    StringReplace(key, "[", "_"); StringReplace(key, "]", "_"); StringReplace(key, "/", "_");
    StringReplace(key, " ", "_");
 
-   string url = "https://" + g_sl_projectId + "-default-rtdb.firebaseio.com/signals/" + g_sl_accountId + ".json?auth=" + g_sl_idToken;
-   string patchBody = "{\"" + key + "\":" + body + "}";
+   // Root-level multi-path PATCH ("account/key": node): with the ~905-char token even
+   // signals/{account}.json sits right at MQL's ~1024-char URL limit on HFM's long id.
+   string url = "https://" + g_sl_projectId + "-default-rtdb.firebaseio.com/signals.json?auth=" + g_sl_idToken;
+   string patchBody = "{\"" + g_sl_accountId + "/" + key + "\":" + body + "}";
    char post[]; StringToCharArray(patchBody, post, 0, StringLen(patchBody));
    char res[]; string hdr;
    int r = WebRequest("PATCH", url, "Content-Type: application/json\r\n", 5000, post, res, hdr);
@@ -391,21 +501,31 @@ bool PublishSignal(string symbol, string action, double entry, double sl, double
          if(g_sl_tracked[t].key == key) { idx = t; break; }
       bool isNew = (idx < 0);   // first time we see this (source, symbol) setup
       if(idx < 0) { idx = ArraySize(g_sl_tracked); ArrayResize(g_sl_tracked, idx + 1); }
+      // A re-publish of the same levels keeps its open time; new levels = a new setup.
+      double pt = SymbolInfoDouble(symbol, SYMBOL_POINT);
+      bool freshSetup = isNew || g_sl_tracked[idx].action != action ||
+                        MathAbs(g_sl_tracked[idx].sl - sl) > pt * 0.5 ||
+                        MathAbs(g_sl_tracked[idx].tp - tp) > pt * 0.5;
+      g_sl_tracked[idx].source     = source;
+      g_sl_tracked[idx].tag        = tag;
+      g_sl_tracked[idx].confidence = confidence;
+      if(freshSetup) g_sl_tracked[idx].openedAt = TimeGMT();
       g_sl_tracked[idx].key       = key;
       g_sl_tracked[idx].symbol    = symbol;
       g_sl_tracked[idx].action    = action;
       g_sl_tracked[idx].entry     = entry;
       g_sl_tracked[idx].sl        = sl;
       g_sl_tracked[idx].tp        = tp;
-      g_sl_tracked[idx].expiresAt = (datetime)(TimeCurrent() + expirySeconds);
+      g_sl_tracked[idx].expiresAt = (datetime)(TimeGMT() + expirySeconds);
       g_sl_tracked[idx].status    = "pending";
       g_sl_tracked[idx].lastLivePush = 0;   // 0 => first prune pushes live price immediately
       Print("Signal published: ", source, " ", symbol, " ", action, " @", entry);
       // Push-notify only the first time this setup appears (not on re-publishes).
       if(isNew)
-         SignalLib_Notify(action + " " + symbol,
-                          source + "  @ " + DoubleToString(entry, digits) +
-                          "  SL " + DoubleToString(sl, digits) + "  TP " + DoubleToString(tp, digits));
+         SignalLib_NotifyFor(source, symbol, action + " " + symbol,
+                             source + (tag != "" ? " (" + tag + ")" : "") + "  @ " + DoubleToString(entry, digits) +
+                             "  SL " + DoubleToString(sl, digits) + "  TP " + DoubleToString(tp, digits),
+                             "{\"screen\":\"signals\",\"account\":\"" + g_sl_accountId + "\"}");
    }
    else Print("Signal publish FAILED HTTP ", r, " ", CharArrayToString(res));
    return (r == 200);
@@ -420,8 +540,8 @@ bool PublishSignal(string symbol, string action, double entry, double sl, double
 //+------------------------------------------------------------------+
 void SignalLib_Delete(string key)
 {
-   string url = "https://" + g_sl_projectId + "-default-rtdb.firebaseio.com/signals/" + g_sl_accountId + ".json?auth=" + g_sl_idToken;
-   string body = "{\"" + key + "\":null}";
+   string url = "https://" + g_sl_projectId + "-default-rtdb.firebaseio.com/signals.json?auth=" + g_sl_idToken;
+   string body = "{\"" + g_sl_accountId + "/" + key + "\":null}";
    char post[]; StringToCharArray(body, post, 0, StringLen(body));
    char res[]; string hdr;
    WebRequest("PATCH", url, "Content-Type: application/json\r\n", 5000, post, res, hdr);
@@ -433,13 +553,57 @@ void SignalLib_Delete(string key)
 //+------------------------------------------------------------------+
 void SignalLib_SetStatus(string key, string status, double currentPrice, int digits)
 {
-   string url = "https://" + g_sl_projectId + "-default-rtdb.firebaseio.com/signals/" + g_sl_accountId + ".json?auth=" + g_sl_idToken;
+   string url = "https://" + g_sl_projectId + "-default-rtdb.firebaseio.com/signals.json?auth=" + g_sl_idToken;
    // multi-path PATCH: update this signal's status AND live price so the app can
    // draw a "where is price now" progress bar between entry/SL/TP. Short URL.
-   string body = "{\"" + key + "/status\":\"" + status + "\",\"" + key + "/currentPrice\":" + DoubleToString(currentPrice, digits) + "}";
+   string p = g_sl_accountId + "/" + key;
+   string body = "{\"" + p + "/status\":\"" + status + "\",\"" + p + "/currentPrice\":" + DoubleToString(currentPrice, digits) + "}";
    char post[]; StringToCharArray(body, post, 0, StringLen(body));
    char res[]; string hdr;
    WebRequest("PATCH", url, "Content-Type: application/json\r\n", 5000, post, res, hdr);
+}
+
+//+------------------------------------------------------------------+
+//| Record how a signal resolved (for the app's Scorecard):            |
+//|  signalLog/{account}/{openedMinute_key} = {source, symbol, action, |
+//|  entry, sl, tp, tag, confidence, openedAt, closedAt, outcome       |
+//|  ("tp"|"sl"|"expired"), exitPrice, r}. Paper result from the       |
+//|  signal's own entry, whether or not it was traded. Written as a    |
+//|  multi-path PATCH on the root node so the URL stays short.         |
+//+------------------------------------------------------------------+
+void SignalLib_LogOutcome(int i, string outcome, double exitPrice)
+{
+   double e = g_sl_tracked[i].entry, sl = g_sl_tracked[i].sl, tp = g_sl_tracked[i].tp;
+   double risk = MathAbs(e - sl);
+   if(e <= 0 || sl <= 0 || risk <= 0) return;                // no defined risk -> no R
+   double r = (g_sl_tracked[i].action == "BUY") ? (exitPrice - e) / risk : (e - exitPrice) / risk;
+   int dg = (int)SymbolInfoInteger(g_sl_tracked[i].symbol, SYMBOL_DIGITS);
+   long closedAt = (long)TimeGMT();
+   string rec = "{\"key\":\"" + SignalLib_JsonEsc(g_sl_tracked[i].key) + "\"," +
+                "\"source\":\"" + SignalLib_JsonEsc(g_sl_tracked[i].source) + "\"," +
+                "\"symbol\":\"" + SignalLib_JsonEsc(g_sl_tracked[i].symbol) + "\"," +
+                "\"action\":\"" + g_sl_tracked[i].action + "\"," +
+                "\"entry\":" + DoubleToString(e, dg) + "," +
+                "\"sl\":" + DoubleToString(sl, dg) + "," +
+                "\"tp\":" + DoubleToString(tp, dg) + "," +
+                "\"tag\":\"" + SignalLib_JsonEsc(g_sl_tracked[i].tag) + "\"," +
+                "\"confidence\":" + IntegerToString(g_sl_tracked[i].confidence) + "," +
+                "\"openedAt\":" + IntegerToString((long)g_sl_tracked[i].openedAt) + "," +
+                "\"closedAt\":" + IntegerToString(closedAt) + "," +
+                "\"outcome\":\"" + outcome + "\"," +
+                "\"exitPrice\":" + DoubleToString(exitPrice, dg) + "," +
+                "\"r\":" + DoubleToString(r, 3) + "}";
+   // Keyed by the minute the setup opened: duplicate EA instances on one symbol
+   // (same source, same setup) overwrite one record instead of double-counting.
+   long openedMin = ((long)g_sl_tracked[i].openedAt > 0 ? (long)g_sl_tracked[i].openedAt : closedAt) / 60 * 60;
+   string path = g_sl_accountId + "/" + IntegerToString(openedMin) + "_" + g_sl_tracked[i].key;
+   string url  = "https://" + g_sl_projectId + "-default-rtdb.firebaseio.com/signalLog.json?auth=" + g_sl_idToken;
+   string body = "{\"" + path + "\":" + rec + "}";
+   char post[]; StringToCharArray(body, post, 0, StringLen(body), CP_UTF8);
+   char res[]; string hdr;
+   int code = WebRequest("PATCH", url, "Content-Type: application/json\r\n", 5000, post, res, hdr);
+   Print("SignalLib: outcome ", g_sl_tracked[i].source, " ", g_sl_tracked[i].symbol, " ", outcome,
+         " R=", DoubleToString(r, 2), " (HTTP ", code, ")");
 }
 
 //+------------------------------------------------------------------+
@@ -453,7 +617,7 @@ void SignalLib_Prune()
    if(total == 0) return;
    if(!SignalLib_EnsureAuth()) return;
 
-   datetime now = TimeCurrent();
+   datetime now = TimeGMT();
    for(int i = total - 1; i >= 0; i--)
    {
       string sym = g_sl_tracked[i].symbol;
@@ -480,6 +644,20 @@ void SignalLib_Prune()
 
       if(invalid)
       {
+         // Classify for the scorecard (SL checked first: conservative on gaps).
+         string outcome = "expired";
+         double exitPx  = (g_sl_tracked[i].action == "BUY") ? bid : ask;
+         if(g_sl_tracked[i].action == "BUY")
+         {
+            if(sl > 0 && bid <= sl)      { outcome = "sl"; exitPx = sl; }
+            else if(tp > 0 && bid >= tp) { outcome = "tp"; exitPx = tp; }
+         }
+         else
+         {
+            if(sl > 0 && ask >= sl)      { outcome = "sl"; exitPx = sl; }
+            else if(tp > 0 && ask <= tp) { outcome = "tp"; exitPx = tp; }
+         }
+         SignalLib_LogOutcome(i, outcome, exitPx);
          SignalLib_Delete(g_sl_tracked[i].key);
          for(int j = i; j < ArraySize(g_sl_tracked) - 1; j++) g_sl_tracked[j] = g_sl_tracked[j+1];
          ArrayResize(g_sl_tracked, ArraySize(g_sl_tracked) - 1);

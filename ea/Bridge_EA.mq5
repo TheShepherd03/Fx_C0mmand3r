@@ -275,7 +275,7 @@ bool FirebaseSignIn()
    g_refreshToken = ExtractJsonValue(response, "refreshToken");
    int expSec     = (int)StringToInteger(ExtractJsonValue(response, "expiresIn"));
    if(expSec <= 0) expSec = 3600;
-   g_tokenExpiry  = TimeCurrent() + expSec - 300; // refresh 5 minutes early
+   g_tokenExpiry  = TimeGMT() + expSec - 300; // refresh 5 minutes early (wall clock: TimeCurrent freezes without ticks)
 
    if(g_idToken == "")
    {
@@ -318,7 +318,7 @@ bool FirebaseRefreshToken()
    if(rt != "") g_refreshToken = rt;
    int expSec  = (int)StringToInteger(ExtractJsonValue(response, "expires_in"));
    if(expSec <= 0) expSec = 3600;
-   g_tokenExpiry = TimeCurrent() + expSec - 300;
+   g_tokenExpiry = TimeGMT() + expSec - 300;
 
    if(g_idToken == "")
       return FirebaseSignIn();
@@ -332,13 +332,13 @@ bool FirebaseRefreshToken()
 bool EnsureValidToken()
 {
    if(g_noAuth) return true;   // bypass: use the DB unauthenticated (open rules)
-   if(g_idToken != "" && TimeCurrent() < g_tokenExpiry)
+   if(g_idToken != "" && TimeGMT() < g_tokenExpiry)
       return true;
 
    // (Re)authentication needed - throttle attempts to once every 30s
-   if(TimeCurrent() - g_lastAuthAttempt < 30)
+   if(TimeGMT() - g_lastAuthAttempt < 30)
       return false;
-   g_lastAuthAttempt = TimeCurrent();
+   g_lastAuthAttempt = TimeGMT();
 
    if(g_idToken == "")
       return FirebaseSignIn();
@@ -452,7 +452,10 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void OnTimer()
 {
-   datetime now = TimeCurrent();
+   // Wall clock, not TimeCurrent(): TimeCurrent() is the last tick's server time and
+   // freezes when the market is closed (weekends on HFM), which silently stopped
+   // syncing, settings reloads and command polling until Monday's first tick.
+   datetime now = TimeGMT();
 
    // Ensure we hold a valid Firebase ID token before any network operation.
    if(!EnsureValidToken())
