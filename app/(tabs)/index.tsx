@@ -5,6 +5,7 @@ import { useAccountData } from '@/hooks/useAccountData';
 import { useHistoryData } from '@/hooks/useHistoryData';
 import { LineChart } from 'react-native-chart-kit';
 import { AccountSelector } from '@/components/AccountSelector';
+import { TerminalStatus } from '@/components/TerminalStatus';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useAuth } from '@/contexts/AuthContext';
@@ -31,12 +32,6 @@ export default function DashboardScreen() {
   const curSym = currencySymbol(data?.currency);
   const formatCurrency = (val: number | undefined) => {
     return val !== undefined ? `${curSym}${val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : `${curSym}0.00`;
-  };
-
-  const isOnline = () => {
-    if (!data) return false;
-    const now = Math.floor(Date.now() / 1000);
-    return (now - data.lastUpdated) < 60;
   };
 
   const calculatePL = () => {
@@ -70,16 +65,14 @@ export default function DashboardScreen() {
         }
       >
 
-        {/* Header — title removed (bottom nav shows the screen); keep status + controls */}
+        {/* Header — title removed (bottom nav shows the screen). Left: live
+            heartbeat of EVERY MT5 terminal (the selected account below is
+            outlined), replacing the old single-account ONLINE/OFFLINE pill.
+            Right: controls. */}
         <View style={styles.header}>
-          <View style={[styles.statusPill, { backgroundColor: isOnline() ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)' }]}>
-            <View style={[styles.statusDot, { backgroundColor: isOnline() ? theme.colors.success : theme.colors.error }]} />
-            <Text style={[styles.statusText, { color: isOnline() ? theme.colors.success : theme.colors.error }]}>
-              {isOnline() ? 'ONLINE' : 'OFFLINE'}
-            </Text>
-          </View>
+          <TerminalStatus style={styles.terminals} />
 
-          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+          <View style={styles.headerControls}>
             <TouchableOpacity onPress={togglePrivacy} style={{ padding: 6 }}>
               <IconSymbol name={balancesHidden ? 'eye.slash.fill' : 'eye.fill'} size={22} color={theme.colors.textSecondary} />
             </TouchableOpacity>
@@ -263,30 +256,25 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
+    // Top-aligned: with several terminals the pills wrap onto extra lines while
+    // the controls stay in the top-right corner.
+    alignItems: 'flex-start',
     marginBottom: 20,
+  },
+  // Same height as the control row (ThemeToggle is 44) so a single line of
+  // pills sits vertically centred against the icons.
+  terminals: {
+    flex: 1,
+    minHeight: 44,
+    marginRight: 8,
+  },
+  headerControls: {
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   appName: {
     fontSize: 22,
     fontWeight: '800',
-    letterSpacing: 0.5,
-  },
-  statusPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 20,
-  },
-  statusDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    marginRight: 6,
-  },
-  statusText: {
-    fontSize: 12,
-    fontWeight: '700',
     letterSpacing: 0.5,
   },
   mainCard: {

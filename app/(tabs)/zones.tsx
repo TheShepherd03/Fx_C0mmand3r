@@ -1,13 +1,16 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { StyleSheet, View, Text, FlatList, TouchableOpacity, Alert, ActivityIndicator, TextInput, Switch, ScrollView, KeyboardAvoidingView, Platform, Keyboard } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { database } from '@/firebaseConfig';
+import { useLocalSearchParams } from 'expo-router';
+import { database, authReady } from '@/firebaseConfig';
 import { ref, onValue, set, remove } from 'firebase/database';
 import { AccountSelector } from '@/components/AccountSelector';
 import { useAccount } from '@/contexts/AccountContext';
 import { useTheme } from '@/contexts/ThemeContext';
 import { IconSymbol } from '@/components/ui/icon-symbol';
+import { parseZoneStatus, zoneAlertLevel } from '@/components/ZoneChart';
+import { ZoneStatusPanel, zoneStateColor } from '@/components/ZoneStatusPanel';
 
 // A supply/demand zone node as stored by the app and read by the MT5 EA at
 // `zones/{accountId}/{symbolKey}`. The app OWNS this node (writes it); the EA
@@ -134,6 +137,44 @@ export default function ZonesScreen() {
     return () => unsubscribe();
   }, [selectedAccount]);
 
+  // Live zone status the zone EA publishes at `zonestatus/{accountId}` — one
+  // child per zoned symbol, under the same sanitized key as zones/{acct}. This
+  // single listener feeds both the chips' near/inside dots and the selected
+  // symbol's live chart. The app only READS this node.
+  const [zoneStatusAll, setZoneStatusAll] = useState<Record<string, unknown>>({});
+  useEffect(() => {
+    setZoneStatusAll({});
+    if (!selectedAccount) return;
+    const statusRef = ref(database, `zonestatus/${selectedAccount}`);
+    let cancelled = false;
+    let unsubscribe = () => {};
+    authReady.then(() => {
+      if (cancelled) return;
+      unsubscribe = onValue(
+        statusRef,
+        (snapshot: any) => {
+          const val = snapshot.val();
+          setZoneStatusAll(val && typeof val === 'object' ? val : {});
+        },
+        (error) => console.error('Failed to read zone status:', error)
+      );
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [selectedAccount]);
+
+  // Chip indicator: hottest zone state per symbol key ('inside' beats 'near').
+  const alertByKey = useMemo(() => {
+    const out: Record<string, 'inside' | 'near'> = {};
+    for (const key of Object.keys(zoneStatusAll)) {
+      const level = zoneAlertLevel(zoneStatusAll[key]);
+      if (level) out[key] = level;
+    }
+    return out;
+  }, [zoneStatusAll]);
+
   // Case-insensitive substring matches for the current input, capped at 15.
   const symbolMatches = useMemo(() => {
     const q = symbolInput.trim().toLowerCase();
@@ -148,6 +189,23 @@ export default function ZonesScreen() {
     symbolMatches.length > 0 &&
     !(symbolMatches.length === 1 && symbolMatches[0] === symbolInput.trim());
 
+  // Live status of the symbol in the editor. Shown for saved symbols (even
+  // before the EA has published) and for any symbol the EA already reports on.
+  // zonestatus uses the exact zones key; a case-insensitive fallback covers a
+  // symbol typed in a different case than the saved entry (same instrument).
+  const editorSymbol = symbolInput.trim();
+  const editorKey = editorSymbol ? symbolKeyFor(editorSymbol) : '';
+  const liveKey = useMemo(() => {
+    if (!editorKey) return '';
+    if (Object.prototype.hasOwnProperty.call(zoneStatusAll, editorKey)) return editorKey;
+    const lower = editorKey.toLowerCase();
+    return Object.keys(zoneStatusAll).find((k) => k.toLowerCase() === lower) ?? '';
+  }, [editorKey, zoneStatusAll]);
+  const liveRaw = liveKey ? zoneStatusAll[liveKey] : undefined;
+  const liveStatus = useMemo(() => parseZoneStatus(liveRaw), [liveRaw]);
+  const showLive =
+    !!editorSymbol && (liveRaw != null || saved.some((s) => s.node.symbol === editorSymbol));
+
   // Tap a suggestion: set the field to the EXACT broker string (no transform).
   const selectSymbol = (sym: string) => {
     Haptics.selectionAsync().catch(() => {});
@@ -156,9 +214,9 @@ export default function ZonesScreen() {
     Keyboard.dismiss();
   };
 
-  // Load a saved symbol into the editor (tap to edit).
-  const loadSymbol = (s: SavedSymbol) => {
-    Haptics.selectionAsync().catch(() => {});
+  // Load a saved symbol into the editor (tap to edit; also used by push deep links).
+  const loadSymbol = (s: SavedSymbol, haptic = true) => {
+    if (haptic) Haptics.selectionAsync().catch(() => {});
     setSymbolInput(s.node.symbol);
     setRows(parseZones(s.node.zones));
     setActive(s.node.active !== false);
@@ -176,6 +234,32 @@ export default function ZonesScreen() {
     setHighDraft('');
     setLowDraft('');
   };
+
+  // Push deep link (`/(tabs)/zones?symbol=…&ts=…`, see usePushNotifications):
+  // preselect that symbol as soon as it's in this account's saved list. The
+  // link carries the broker's resolved name, which may differ in CASE from the
+  // saved entry (e.g. typed "volatility 10 index"), so match case-insensitively
+  // on the entry's symbol or its sanitized key. `ts` is unique per tap, so a
+  // second alert for the same symbol re-selects it even if the editor has
+  // moved on; an already-handled link never re-applies.
+  const linkParams = useLocalSearchParams<{ symbol?: string | string[]; ts?: string | string[] }>();
+  const firstParam = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v) ?? '';
+  const linkSymbol = firstParam(linkParams.symbol).trim();
+  const linkTs = firstParam(linkParams.ts);
+  const handledLinkRef = useRef('');
+  useEffect(() => {
+    if (!linkSymbol) return;
+    const linkId = `${linkSymbol}|${linkTs}`;
+    if (handledLinkRef.current === linkId) return;
+    const wanted = linkSymbol.toLowerCase();
+    const wantedKey = symbolKeyFor(linkSymbol).toLowerCase();
+    const match =
+      saved.find((s) => s.node.symbol.trim().toLowerCase() === wanted) ??
+      saved.find((s) => s.key.toLowerCase() === wantedKey);
+    if (!match) return; // list not loaded yet (or not zoned on this account) — retry on the next update
+    handledLinkRef.current = linkId;
+    loadSymbol(match, false);
+  }, [linkSymbol, linkTs, saved]);
 
   // Keep only digits + a single decimal point.
   const cleanNum = (text: string) =>
@@ -303,6 +387,7 @@ export default function ZonesScreen() {
               {saved.map((s) => {
                 const isSel = s.node.symbol === symbolInput.trim();
                 const count = parseZones(s.node.zones).length;
+                const zoneAlert = alertByKey[s.key]; // price near / inside one of its zones
                 return (
                   <TouchableOpacity
                     key={s.key}
@@ -320,10 +405,26 @@ export default function ZonesScreen() {
                     <View style={[styles.countBadge, { backgroundColor: theme.colors.input }]}>
                       <Text style={[styles.countText, { color: theme.colors.textSecondary }]}>{count}</Text>
                     </View>
+                    {zoneAlert && (
+                      <View
+                        style={[
+                          styles.alertDot,
+                          { backgroundColor: zoneStateColor(zoneAlert, theme), borderColor: theme.colors.background },
+                        ]}
+                      />
+                    )}
                   </TouchableOpacity>
                 );
               })}
             </View>
+          )}
+
+          {/* Live chart + zone status for the symbol in the editor */}
+          {showLive && (
+            <>
+              <Text style={[styles.sectionHeader, { color: theme.colors.textSecondary }]}>Live status</Text>
+              <ZoneStatusPanel symbol={editorSymbol} status={liveStatus} />
+            </>
           )}
 
           {/* Editor */}
@@ -562,6 +663,17 @@ const styles = StyleSheet.create({
   countText: {
     fontSize: 11,
     fontWeight: '700',
+  },
+  // Corner dot on a chip: amber = price near a zone, red = inside one. The
+  // background-coloured ring cuts it out of the chip's border.
+  alertDot: {
+    position: 'absolute',
+    top: -4,
+    right: -4,
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    borderWidth: 2,
   },
   fieldLabel: {
     fontSize: 12,
