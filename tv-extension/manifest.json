@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "Command0r Zones (TradingView)",
+  "version": "1.0.0",
+  "description": "Read rectangle zones from your TradingView chart and send them to the Command0r app/EA via Firebase.",
+  "permissions": ["storage", "scripting", "tabs"],
+  "host_permissions": [
+    "https://*.tradingview.com/*",
+    "https://c0mmand3r-default-rtdb.firebaseio.com/*",
+    "https://identitytoolkit.googleapis.com/*",
+    "https://securetoken.googleapis.com/*"
+  ],
+  "icons": {
+    "16": "icon16.png",
+    "32": "icon32.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Command0r Zones",
+    "default_icon": {
+      "16": "icon16.png",
+      "32": "icon32.png",
+      "48": "icon48.png",
+      "128": "icon128.png"
+    }
+  }
+}
