@@ -1,9 +1,9 @@
-import React, { useState, useEffect } from 'react';
-import { StyleSheet, View, Text, FlatList, TouchableOpacity, Alert, ActivityIndicator, TextInput, RefreshControl } from 'react-native';
+import React, { useState, useEffect, useMemo, useReducer } from 'react';
+import { StyleSheet, View, Text, FlatList, TouchableOpacity, Alert, ActivityIndicator, TextInput, RefreshControl, Pressable } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { database } from '@/firebaseConfig';
-import { ref, query, orderByChild, limitToLast, onValue, set } from 'firebase/database';
+import { ref, query, orderByChild, limitToLast, onValue, set, update } from 'firebase/database';
 import { AccountSelector } from '@/components/AccountSelector';
 import { useAccount } from '@/contexts/AccountContext';
 import { useTheme } from '@/contexts/ThemeContext';
@@ -11,13 +11,44 @@ import { Signal } from '@/constants/types';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { ExecuteSignalModal } from '@/components/ExecuteSignalModal';
 import { useAccountData } from '@/hooks/useAccountData';
+import { SwipeToDismiss } from '@/components/SwipeToDismiss';
+import { SignalActionSheet, type SignalAction } from '@/components/SignalActionSheet';
+import { UndoToast, type ToastData } from '@/components/UndoToast';
+import {
+  SignalSettingsSheet,
+  isSourceInFeed,
+  isSymbolMuted,
+  saveSourcePrefs,
+  saveSymbolMuted,
+  useSignalPrefs,
+} from '@/components/SignalSettingsSheet';
 
 const FILTERS = ['All Signals', 'Pending', 'Winning'];
+const SNOOZE_SECS = 3600; // "Snooze 1h"
+
+// Inbox fields the APP writes on a signal node (via multi-path update). The EA
+// replaces the whole node when a NEW signal lands on that key — which clears
+// these — and only ever patches status/currentPrice itself, so the app never
+// writes those two.
+type InboxSignal = Signal & {
+  dismissed?: boolean;
+  snoozedUntil?: number; // UTC epoch secs; hidden from the feed until then
+  tag?: string;          // e.g. "sweep" / "engulf" / "reject" for Zones
+};
+
+// Local wall-clock HH:MM for a UTC epoch-seconds timestamp.
+const clockTime = (sec: number) => {
+  const d = new Date(sec * 1000);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+};
+
+const isSnoozed = (s: InboxSignal, now: number) =>
+  typeof s.snoozedUntil === 'number' && s.snoozedUntil > now;
 
 export default function SignalsScreen() {
   const { selectedAccount } = useAccount();
   const { theme } = useTheme();
-  const [signals, setSignals] = useState<Signal[]>([]);
+  const [signals, setSignals] = useState<InboxSignal[]>([]);
   const [loading, setLoading] = useState(true);
   const [executingIds, setExecutingIds] = useState<Set<string>>(new Set());
   const [activeFilter, setActiveFilter] = useState('All Signals');
@@ -35,6 +66,20 @@ export default function SignalsScreen() {
   // would overwrite an 'executed'/'rejected' flag, making the signal reappear.
   const [actedIds, setActedIds] = useState<Set<string>>(new Set());
   const { data: acctData } = useAccountData();
+
+  // --- Inbox controls: dismiss / snooze / mute / hide source + settings -------
+  const { prefs } = useSignalPrefs();
+  const [settingsVisible, setSettingsVisible] = useState(false);
+  const [menuVisible, setMenuVisible] = useState(false);
+  const [menuSignal, setMenuSignal] = useState<InboxSignal | null>(null);
+  const [toast, setToast] = useState<ToastData | null>(null);
+  // Periodic re-render so snoozed signals reappear on time (and the expiry
+  // countdowns stay fresh between the EA's live-price pushes).
+  const [, bumpClock] = useReducer((n: number) => n + 1, 0);
+  useEffect(() => {
+    const id = setInterval(bumpClock, 15000);
+    return () => clearInterval(id);
+  }, []);
 
   const LOT_STEP = 0.01;
   const LOT_MIN = 0.01;
@@ -156,6 +201,102 @@ export default function SignalsScreen() {
     setActedIds(prev => new Set(prev).add(signal.id));
   };
 
+  // ---- Inbox actions --------------------------------------------------------
+  const showToast = (message: string, onUndo?: () => void) =>
+    setToast({ id: Date.now(), message, onAction: onUndo, actionLabel: onUndo ? 'Undo' : undefined });
+
+  // Dismiss = a synced `dismissed` flag on each node, all in ONE multi-path update
+  // (never touches status/currentPrice). Undo clears the flag the same way.
+  const dismissSignals = (items: InboxSignal[], message: string) => {
+    if (!selectedAccount || items.length === 0) return;
+    const acct = selectedAccount;
+    const keys = items.map(s => s.id);
+    const patch: Record<string, true> = {};
+    keys.forEach(k => { patch[`${k}/dismissed`] = true; });
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+    update(ref(database, `signals/${acct}`), patch)
+      .catch(() => Alert.alert('Error', 'Could not dismiss. Check your connection and try again.'));
+    showToast(message, () => {
+      const undo: Record<string, null> = {};
+      keys.forEach(k => { undo[`${k}/dismissed`] = null; });
+      update(ref(database, `signals/${acct}`), undo).catch(() => {});
+    });
+  };
+
+  const dismissOne = (s: InboxSignal) => dismissSignals([s], `Dismissed ${s.symbol}`);
+
+  const clearAll = (items: InboxSignal[]) =>
+    dismissSignals(items, `Cleared ${items.length} signal${items.length === 1 ? '' : 's'}`);
+
+  const snoozeSignal = (s: InboxSignal) => {
+    if (!selectedAccount) return;
+    const acct = selectedAccount;
+    const until = Math.floor(Date.now() / 1000) + SNOOZE_SECS;
+    update(ref(database, `signals/${acct}`), { [`${s.id}/snoozedUntil`]: until })
+      .catch(() => Alert.alert('Error', 'Could not snooze. Check your connection and try again.'));
+    showToast(`Snoozed ${s.symbol} until ${clockTime(until)}`, () => {
+      update(ref(database, `signals/${acct}`), { [`${s.id}/snoozedUntil`]: null }).catch(() => {});
+    });
+  };
+
+  const muteSymbol = (s: InboxSignal) => {
+    const symbol = s.symbol;
+    saveSymbolMuted(symbol, true)
+      .catch(() => Alert.alert('Error', 'Could not mute that symbol. Check your connection.'));
+    showToast(`Muted ${symbol}`, () => { saveSymbolMuted(symbol, false).catch(() => {}); });
+  };
+
+  const hideSource = (s: InboxSignal) => {
+    if (!s.source) return;
+    const source = s.source;
+    saveSourcePrefs(source, { feed: false })
+      .catch(() => Alert.alert('Error', 'Could not hide that source. Check your connection.'));
+    showToast(`Hid ${source} from the feed`, () => { saveSourcePrefs(source, { feed: true }).catch(() => {}); });
+  };
+
+  const openMenu = (s: InboxSignal) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+    setMenuSignal(s);
+    setMenuVisible(true);
+  };
+
+  const menuActions = (s: InboxSignal): SignalAction[] => {
+    const actions: SignalAction[] = [
+      {
+        key: 'snooze',
+        icon: 'zzz',
+        label: 'Snooze 1h',
+        hint: `Hide until ${clockTime(Math.floor(Date.now() / 1000) + SNOOZE_SECS)}, then it comes back`,
+        onPress: () => snoozeSignal(s),
+      },
+      {
+        key: 'mute',
+        icon: 'bell.slash',
+        label: `Mute ${s.symbol}`,
+        hint: 'Hide its signals and silence its pushes',
+        onPress: () => muteSymbol(s),
+      },
+    ];
+    if (s.source) {
+      actions.push({
+        key: 'hide-source',
+        icon: 'eye.slash.fill',
+        label: `Hide source ${s.source}`,
+        hint: 'Remove this strategy from your feed',
+        onPress: () => hideSource(s),
+      });
+    }
+    actions.push({
+      key: 'dismiss',
+      icon: 'xmark',
+      label: 'Dismiss',
+      hint: 'Remove this signal from the inbox',
+      destructive: true,
+      onPress: () => dismissOne(s),
+    });
+    return actions;
+  };
+
   const formatTime = (timestamp: number) => {
     if (!timestamp) return "";
     const now = Math.floor(Date.now() / 1000);
@@ -178,17 +319,49 @@ export default function SignalsScreen() {
     return `expires in ${Math.floor(secs / 3600)}h`;
   };
 
-  const sources = Array.from(new Set(signals.map(s => s.source).filter(Boolean))).sort();
+  const nowSec = Math.floor(Date.now() / 1000);
+
+  // Inbox rules: dismissed, snoozed, muted symbol, or source switched off for the feed.
+  const hiddenByInbox = (s: InboxSignal, now: number) =>
+    s.dismissed === true ||
+    isSnoozed(s, now) ||
+    isSymbolMuted(prefs, s.symbol) ||
+    !isSourceInFeed(prefs, s.source);
+
+  const sources = Array.from(new Set(
+    signals.filter(s => !hiddenByInbox(s, nowSec)).map(s => s.source).filter(Boolean)
+  )).sort();
+
+  // If the selected source chip disappears (dismissed/hidden/muted away), fall back to All.
+  const sourcesKey = sources.join('\n');
+  useEffect(() => {
+    if (activeSource !== 'All' && !sourcesKey.split('\n').includes(activeSource)) {
+      setActiveSource('All');
+    }
+  }, [sourcesKey, activeSource]);
+
+  // Every source/symbol in the feed (including hidden ones) — lets the settings
+  // sheet list sources and show muted symbols by their real names.
+  const feedSources = useMemo(
+    () => Array.from(new Set(signals.map(s => s.source).filter(Boolean))),
+    [signals]
+  );
+  const feedSymbols = useMemo(
+    () => Array.from(new Set(signals.map(s => s.symbol).filter(Boolean))),
+    [signals]
+  );
 
   const getFilteredSignals = () => {
     const now = Math.floor(Date.now() / 1000);
     // Show only valid, actionable signals: drop expired, ones acted on this session,
     // and any legacy executed/rejected. (SL/TP-hit signals are pruned by the EA.)
+    // Then apply the inbox rules (dismissed / snoozed / muted / hidden source).
     let filtered = signals.filter(s =>
       !(s.expiresAt && s.expiresAt < now) &&
       !actedIds.has(s.id) &&
       s.status !== 'executed' &&
-      s.status !== 'rejected'
+      s.status !== 'rejected' &&
+      !hiddenByInbox(s, now)
     );
 
     // Source filter
@@ -216,7 +389,26 @@ export default function SignalsScreen() {
     }
   };
 
-  const renderItem = ({ item }: { item: Signal }) => {
+  const visibleSignals = getFilteredSignals();
+
+  // Live signals kept out of the feed by snooze / mute / hidden source (footer hint).
+  const live = signals.filter(s =>
+    !(s.expiresAt && s.expiresAt < nowSec) &&
+    !actedIds.has(s.id) &&
+    s.status !== 'executed' &&
+    s.status !== 'rejected' &&
+    s.dismissed !== true
+  );
+  const snoozedCount = live.filter(s => isSnoozed(s, nowSec)).length;
+  const mutedCount = live.filter(s =>
+    !isSnoozed(s, nowSec) && (isSymbolMuted(prefs, s.symbol) || !isSourceInFeed(prefs, s.source))
+  ).length;
+  const hiddenNote = [
+    snoozedCount ? `${snoozedCount} snoozed` : '',
+    mutedCount ? `${mutedCount} muted or hidden` : '',
+  ].filter(Boolean).join(' · ');
+
+  const renderItem = ({ item }: { item: InboxSignal }) => {
     const isPending = item.status === 'pending';
     const isWinning = item.status === 'winning';
     const isProcessing = executingIds.has(item.id);
@@ -256,14 +448,21 @@ export default function SignalsScreen() {
                     : drift > 0 ? 'moved toward TP — chasing' : 'pulled toward SL — can wait';
 
     return (
-      <View style={[styles.card, { backgroundColor: theme.colors.card }]}>
+      // Swipe either way to dismiss; long-press (or •••) for snooze / mute / hide source.
+      <SwipeToDismiss onDismiss={() => dismissOne(item)} enabled={!isProcessing} style={styles.swipeRow}>
+      <Pressable
+        onLongPress={() => openMenu(item)}
+        delayLongPress={350}
+        accessibilityHint="Swipe sideways to dismiss. Long-press for more options."
+        style={[styles.card, styles.cardInRow, { backgroundColor: theme.colors.card }]}
+      >
         {/* Header */}
         <View style={styles.cardHeader}>
           <View style={styles.headerLeft}>
             <View style={[styles.symbolIcon, { backgroundColor: symbolColor }]}>
               <Text style={styles.symbolIconText}>{item.symbol.substring(0, 3)}</Text>
             </View>
-            <View>
+            <View style={styles.headerText}>
               <View style={styles.titleRow}>
                 <Text style={[styles.symbolText, { color: theme.colors.text }]}>{item.symbol}</Text>
                 <View style={[styles.statusBadge, { backgroundColor: statusColor + '20' }]}>
@@ -273,7 +472,7 @@ export default function SignalsScreen() {
                 </View>
               </View>
               <Text style={[styles.metaText, { color: theme.colors.textSecondary }]}>
-                {item.source || 'Signal Feed'} • {formatTime(item.timestamp)}
+                {item.source || 'Signal Feed'}{item.tag ? ` · ${item.tag}` : ''} • {formatTime(item.timestamp)}
                 {item.expiresAt ? ` • ${expiryLabel(item.expiresAt)}` : ''}
               </Text>
             </View>
@@ -285,6 +484,29 @@ export default function SignalsScreen() {
               <Text style={[styles.confidenceValue, { color: theme.colors.text }]}>{item.confidence}%</Text>
             </View>
             <Text style={[styles.confidenceLabel, { color: theme.colors.textSecondary }]}>Confidence</Text>
+          </View>
+
+          {/* Inbox controls: dismiss + more (snooze / mute / hide source) */}
+          <View style={styles.cardTools}>
+            <TouchableOpacity
+              style={[styles.toolBtn, { backgroundColor: theme.colors.input }]}
+              onPress={() => dismissOne(item)}
+              disabled={isProcessing}
+              hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+              accessibilityRole="button"
+              accessibilityLabel={`Dismiss ${item.symbol} signal`}
+            >
+              <IconSymbol name="xmark" size={15} color={theme.colors.textSecondary} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.toolBtn, { backgroundColor: theme.colors.input }]}
+              onPress={() => openMenu(item)}
+              hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+              accessibilityRole="button"
+              accessibilityLabel={`More actions for ${item.symbol}`}
+            >
+              <IconSymbol name="ellipsis" size={17} color={theme.colors.textSecondary} />
+            </TouchableOpacity>
           </View>
         </View>
 
@@ -409,16 +631,38 @@ export default function SignalsScreen() {
             <Text style={[styles.detailsBtnText, { color: theme.colors.textSecondary }]}>View Trade Details →</Text>
           </TouchableOpacity>
         )}
-      </View>
+      </Pressable>
+      </SwipeToDismiss>
     );
   };
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.background }]}>
-      {/* Header — title/subtitle removed (bottom nav shows the screen); keep search */}
+      {/* Header — title/subtitle removed (bottom nav shows the screen); inbox count + actions */}
       <View style={[styles.header, { backgroundColor: theme.colors.background }]}>
-        <View style={[styles.headerTop, { justifyContent: 'flex-end' }]}>
+        <View style={styles.headerTop}>
+          <Text style={[styles.inboxCount, { color: theme.colors.textSecondary }]} numberOfLines={1}>
+            {loading ? '' : `${visibleSignals.length} ${visibleSignals.length === 1 ? 'signal' : 'signals'}`}
+          </Text>
           <View style={styles.headerIcons}>
+            <TouchableOpacity
+              onPress={() => clearAll(visibleSignals)}
+              disabled={visibleSignals.length === 0}
+              style={[styles.clearBtn, { backgroundColor: theme.colors.card, opacity: visibleSignals.length === 0 ? 0.45 : 1 }]}
+              accessibilityRole="button"
+              accessibilityLabel="Clear all visible signals"
+            >
+              <IconSymbol name="xmark.bin" size={18} color={theme.colors.text} />
+              <Text style={[styles.clearText, { color: theme.colors.text }]}>Clear all</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => setSettingsVisible(true)}
+              style={[styles.iconBtn, { backgroundColor: theme.colors.card }]}
+              accessibilityRole="button"
+              accessibilityLabel="Signal settings"
+            >
+              <IconSymbol name="gear" size={20} color={theme.colors.text} />
+            </TouchableOpacity>
             <TouchableOpacity onPress={() => setShowSearch(!showSearch)} style={[styles.iconBtn, { backgroundColor: theme.colors.card }]}>
               <IconSymbol name="magnifyingglass" size={20} color={theme.colors.text} />
             </TouchableOpacity>
@@ -492,7 +736,7 @@ export default function SignalsScreen() {
 
       {/* Signal List */}
       <FlatList
-        data={getFilteredSignals()}
+        data={visibleSignals}
         renderItem={renderItem}
         keyExtractor={item => item.id}
         contentContainerStyle={styles.listContent}
@@ -509,6 +753,21 @@ export default function SignalsScreen() {
             <ActivityIndicator style={{ marginTop: 40 }} size="large" color={theme.colors.primary} />
           )
         }
+        ListFooterComponent={
+          !loading && hiddenNote ? (
+            <TouchableOpacity
+              style={styles.hiddenNote}
+              onPress={() => setSettingsVisible(true)}
+              accessibilityRole="button"
+              accessibilityLabel={`${hiddenNote}. Open signal settings`}
+            >
+              <IconSymbol name="eye.slash.fill" size={14} color={theme.colors.textTertiary} />
+              <Text style={[styles.hiddenNoteText, { color: theme.colors.textTertiary }]}>
+                {hiddenNote} · <Text style={{ color: theme.colors.primary, fontWeight: '700' }}>Manage</Text>
+              </Text>
+            </TouchableOpacity>
+          ) : null
+        }
       />
 
       <ExecuteSignalModal
@@ -521,6 +780,25 @@ export default function SignalsScreen() {
         onClose={() => setExecVisible(false)}
         onConfirm={doExecute}
       />
+
+      <SignalActionSheet
+        visible={menuVisible}
+        title={menuSignal ? `${menuSignal.symbol} · ${menuSignal.action}` : ''}
+        subtitle={menuSignal ? [menuSignal.source, menuSignal.tag].filter(Boolean).join(' · ') : undefined}
+        actions={menuSignal ? menuActions(menuSignal) : []}
+        onClose={() => setMenuVisible(false)}
+      />
+
+      <SignalSettingsSheet
+        visible={settingsVisible}
+        onClose={() => setSettingsVisible(false)}
+        prefs={prefs}
+        account={selectedAccount}
+        feedSources={feedSources}
+        feedSymbols={feedSymbols}
+      />
+
+      <UndoToast toast={toast} onHide={() => setToast(null)} bottom={12} />
     </SafeAreaView>
   );
 }
@@ -587,6 +865,12 @@ const styles = StyleSheet.create({
     fontSize: 28,
     fontWeight: 'bold',
   },
+  inboxCount: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '600',
+    marginRight: 12,
+  },
   headerIcons: {
     flexDirection: 'row',
     gap: 12,
@@ -597,6 +881,18 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  clearBtn: {
+    height: 40,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  clearText: {
+    fontSize: 13,
+    fontWeight: '700',
   },
   headerSubtitle: {
     fontSize: 14,
@@ -638,6 +934,11 @@ const styles = StyleSheet.create({
     padding: 16,
     paddingTop: 0,
   },
+  // Swipeable row wrapper carries the spacing so the revealed panel matches the card.
+  swipeRow: {
+    marginBottom: 16,
+    borderRadius: 16,
+  },
   card: {
     borderRadius: 16,
     padding: 16,
@@ -648,6 +949,9 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 2,
   },
+  cardInRow: {
+    marginBottom: 0,
+  },
   cardHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -657,6 +961,20 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 12,
     flex: 1,
+  },
+  headerText: {
+    flex: 1,
+  },
+  cardTools: {
+    marginLeft: 10,
+    gap: 6,
+  },
+  toolBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   symbolIcon: {
     width: 48,
@@ -672,6 +990,7 @@ const styles = StyleSheet.create({
   },
   titleRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'center',
     gap: 8,
     marginBottom: 4,
@@ -679,6 +998,7 @@ const styles = StyleSheet.create({
   symbolText: {
     fontSize: 18,
     fontWeight: 'bold',
+    flexShrink: 1,
   },
   statusBadge: {
     paddingHorizontal: 6,
@@ -837,5 +1157,17 @@ const styles = StyleSheet.create({
   emptyText: {
     marginTop: 16,
     fontSize: 16,
-  }
+  },
+  hiddenNote: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 12,
+    marginBottom: 12,
+  },
+  hiddenNoteText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
 });

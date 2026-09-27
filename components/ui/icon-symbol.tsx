@@ -43,6 +43,14 @@ const MAPPING: IconMapping = {
   'magnifyingglass': 'search',
   'slider.horizontal.3': 'tune',
   'antenna.radiowaves.left.and.right.slash': 'signal-cellular-off',
+  // Signal inbox (dismiss / snooze / mute / settings) & scorecard
+  'ellipsis': 'more-horiz',
+  'xmark.bin': 'clear-all',
+  'zzz': 'snooze',
+  'bell.slash': 'notifications-off',
+  'moon.fill': 'bedtime',
+  'chevron.up': 'keyboard-arrow-up',
+  'chevron.down': 'keyboard-arrow-down',
 
   // Trade Control & Actions
   'clock.arrow.circlepath': 'history',
