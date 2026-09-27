@@ -1,33 +1,21 @@
 import { Tabs } from 'expo-router';
 import React from 'react';
-import { View } from 'react-native';
-import { BottomTabBar } from '@react-navigation/bottom-tabs';
 
-import { HapticTab } from '@/components/haptic-tab';
+import { FloatingNav } from '@/components/FloatingNav';
 import { IconSymbol } from '@/components/ui/icon-symbol';
-import { LiveStatusBar } from '@/components/LiveStatusBar';
-import { Colors } from '@/constants/theme';
-import { useColorScheme } from '@/hooks/use-color-scheme';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
 
 export default function TabLayout() {
-  const colorScheme = useColorScheme();
   usePushNotifications(); // register device for new-signal push notifications
 
   return (
     <Tabs
       screenOptions={{
-        tabBarActiveTintColor: Colors[colorScheme ?? 'light'].tint,
         headerShown: false,
-        tabBarButton: HapticTab,
       }}
-      // Live P/L + Risk strip sits directly above the tab bar on every screen.
-      tabBar={(props) => (
-        <View>
-          <LiveStatusBar />
-          <BottomTabBar {...props} />
-        </View>
-      )}>
+      // One floating nav button (with live P/L + Risk either side) that expands
+      // into a menu of every screen, instead of a crowded row of tabs.
+      tabBar={(props) => <FloatingNav {...props} />}>
       <Tabs.Screen
         name="index"
         options={{
@@ -54,6 +42,13 @@ export default function TabLayout() {
         options={{
           title: 'News',
           tabBarIcon: ({ color }) => <IconSymbol size={28} name="calendar" color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="zones"
+        options={{
+          title: 'Zones',
+          tabBarIcon: ({ color }) => <IconSymbol size={28} name="square.stack.3d.up" color={color} />,
         }}
       />
       <Tabs.Screen

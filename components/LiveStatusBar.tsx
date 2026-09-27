@@ -7,15 +7,14 @@ import { totalRisk, totalPnL } from '@/utils/positionMath';
 import { currencySymbol } from '@/utils/currency';
 
 /**
- * Compact always-visible strip (rendered just above the tab bar) showing live
- * floating P/L and total risk-to-SL, so they're visible from every screen.
+ * Live floating P/L and total risk-to-SL for the selected account, already
+ * formatted (and masked when balances are hidden). Shared by the standalone
+ * LiveStatusBar strip and the FloatingNav dock.
  */
-export function LiveStatusBar() {
+export function useLiveStatus() {
   const { data } = useAccountData();
   const { theme } = useTheme();
   const { hidden, statusBarEnabled } = usePrivacy();
-
-  if (!statusBarEnabled) return null;
 
   const positions = data?.positions ?? [];
   const pnl = totalPnL(positions);
@@ -25,20 +24,34 @@ export function LiveStatusBar() {
   const money = (n: number) => `${n < 0 ? '-' : ''}${cur}${Math.abs(n).toFixed(2)}`;
   const MASK = '••••';
 
+  return {
+    enabled: statusBarEnabled,
+    pnlText: hidden ? MASK : `${pnl >= 0 ? '+' : ''}${money(pnl)}`,
+    pnlColor: pnl >= 0 ? theme.colors.profit : theme.colors.loss,
+    riskText: hidden ? MASK : risk > 0 ? `-${cur}${risk.toFixed(2)}` : `${cur}0.00`,
+    riskColor: risk > 0 ? theme.colors.loss : theme.colors.textSecondary,
+  };
+}
+
+/**
+ * Compact always-visible strip showing live floating P/L and total risk-to-SL.
+ */
+export function LiveStatusBar() {
+  const { theme } = useTheme();
+  const s = useLiveStatus();
+
+  if (!s.enabled) return null;
+
   return (
     <View style={[styles.bar, { backgroundColor: theme.colors.card, borderTopColor: theme.colors.border }]}>
       <View style={styles.cell}>
         <Text style={[styles.label, { color: theme.colors.textSecondary }]}>P/L</Text>
-        <Text style={[styles.value, { color: pnl >= 0 ? theme.colors.profit : theme.colors.loss }]}>
-          {hidden ? MASK : `${pnl >= 0 ? '+' : ''}${money(pnl)}`}
-        </Text>
+        <Text style={[styles.value, { color: s.pnlColor }]}>{s.pnlText}</Text>
       </View>
       <View style={[styles.divider, { backgroundColor: theme.colors.border }]} />
       <View style={styles.cell}>
         <Text style={[styles.label, { color: theme.colors.textSecondary }]}>Risk</Text>
-        <Text style={[styles.value, { color: risk > 0 ? theme.colors.loss : theme.colors.textSecondary }]}>
-          {hidden ? MASK : (risk > 0 ? `-${cur}${risk.toFixed(2)}` : `${cur}0.00`)}
-        </Text>
+        <Text style={[styles.value, { color: s.riskColor }]}>{s.riskText}</Text>
       </View>
     </View>
   );

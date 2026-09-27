@@ -23,6 +23,8 @@ const MAPPING: IconMapping = {
   'bolt.fill': 'flash-on',
   'calendar': 'event',
   'newspaper': 'article',
+  'square.stack.3d.up': 'layers',
+  'square.grid.2x2': 'apps',
   'arrow.left': 'arrow-back',
   'xmark': 'close',
   'gear': 'settings',
