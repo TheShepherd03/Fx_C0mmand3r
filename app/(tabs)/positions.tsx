@@ -4,12 +4,13 @@ import {
   Text,
   FlatList,
   StyleSheet,
-  SafeAreaView,
   TouchableOpacity,
   ActivityIndicator,
-  Alert,
   RefreshControl
 } from 'react-native';
+// Not react-native's SafeAreaView: that one is iOS-only, so on Android the screen
+// started under the status bar (same as every other tab now).
+import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 import { Position, ClosedTrade } from '@/constants/types';
 import { useAccount } from '@/contexts/AccountContext';
@@ -22,6 +23,7 @@ import { useTheme } from '@/contexts/ThemeContext';
 import { database } from '@/firebaseConfig';
 import { ref, set, onValue, off } from 'firebase/database';
 import { IconSymbol } from '@/components/ui/icon-symbol';
+import { showAlert } from '@/components/AppDialog';
 
 interface AccountData {
   balance?: number;
@@ -113,7 +115,7 @@ export default function PositionsScreen() {
   };
 
   const handleClosePosition = async (ticket: number) => {
-    Alert.alert(
+    showAlert(
       "Confirm Close",
       `Are you sure you want to close ticket #${ticket}?`,
       [
@@ -126,7 +128,7 @@ export default function PositionsScreen() {
             setClosingIds(prev => new Set(prev).add(ticket));
             try {
               if (!selectedAccount) {
-                Alert.alert("Error", "No account selected");
+                showAlert("Error", "No account selected");
                 return;
               }
               const commandRef = ref(database, `commands/${selectedAccount}/latest`);
@@ -137,7 +139,7 @@ export default function PositionsScreen() {
                 timestamp: Math.floor(Date.now() / 1000)
               });
             } catch {
-              Alert.alert("Error", "Failed to send close command");
+              showAlert("Error", "Failed to send close command");
               setClosingIds(prev => {
                 const next = new Set(prev);
                 next.delete(ticket);
@@ -160,7 +162,7 @@ export default function PositionsScreen() {
   const handleScalePosition = async (lots: number) => {
     if (!selectedAccount || !selectedPosition) return;
     const scaledLots = Math.max(0.01, Math.round(lots * 100) / 100);
-    if (!scaledLots || isNaN(scaledLots)) { Alert.alert("Error", "Enter a valid lot size."); return; }
+    if (!scaledLots || isNaN(scaledLots)) { showAlert("Error", "Enter a valid lot size."); return; }
 
     try {
       const command = {
@@ -177,11 +179,11 @@ export default function PositionsScreen() {
       const commandRef = ref(database, `commands/${selectedAccount}/latest`);
       await set(commandRef, command);
 
-      Alert.alert("Success", `Position scaling command sent for ${selectedPosition.symbol}.\nNew lot size: ${scaledLots}`);
+      showAlert("Success", `Position scaling command sent for ${selectedPosition.symbol}.\nNew lot size: ${scaledLots}`);
       setModalVisible(false);
     } catch (error) {
       console.error('Scale command error:', error);
-      Alert.alert("Error", `Failed to send scale command: ${error}`);
+      showAlert("Error", `Failed to send scale command: ${error}`);
     }
   };
 
@@ -191,7 +193,7 @@ export default function PositionsScreen() {
   const handleHedgePosition = async (lots: number, sl: number, tp: number) => {
     if (!selectedAccount || !selectedPosition) return;
     const hedgeLots = Math.max(0.01, Math.round(lots * 100) / 100);
-    if (!hedgeLots || isNaN(hedgeLots)) { Alert.alert("Error", "Enter a valid hedge lot size."); return; }
+    if (!hedgeLots || isNaN(hedgeLots)) { showAlert("Error", "Enter a valid hedge lot size."); return; }
     const hedgeType = selectedPosition.type === 0 ? 1 : 0; // opposite direction
 
     try {
@@ -209,7 +211,7 @@ export default function PositionsScreen() {
       const commandRef = ref(database, `commands/${selectedAccount}/latest`);
       await set(commandRef, command);
 
-      Alert.alert(
+      showAlert(
         "Success",
         `Hedge sent: ${hedgeType === 0 ? 'BUY' : 'SELL'} ${hedgeLots} ${selectedPosition.symbol} at market` +
           `${sl > 0 ? `, SL ${sl}` : ''}${tp > 0 ? `, TP ${tp}` : ''}.`
@@ -217,7 +219,7 @@ export default function PositionsScreen() {
       setModalVisible(false);
     } catch (error) {
       console.error('Hedge command error:', error);
-      Alert.alert("Error", `Failed to send hedge command: ${error}`);
+      showAlert("Error", `Failed to send hedge command: ${error}`);
     }
   };
 
@@ -232,7 +234,7 @@ export default function PositionsScreen() {
 
   const handleModifySLTP = async (ticket: number, sl: number, tp: number) => {
     if (!selectedAccount) {
-      Alert.alert("Error", "No account selected");
+      showAlert("Error", "No account selected");
       return;
     }
 
@@ -246,9 +248,9 @@ export default function PositionsScreen() {
         status: 'PENDING',
         timestamp: Math.floor(Date.now() / 1000)
       });
-      Alert.alert("Success", "SL/TP modification sent to EA");
+      showAlert("Success", "SL/TP modification sent to EA");
     } catch {
-      Alert.alert("Error", "Failed to send SL/TP modification command");
+      showAlert("Error", "Failed to send SL/TP modification command");
     }
   };
 
@@ -281,6 +283,14 @@ export default function PositionsScreen() {
       return h > 0 ? `${h}h ${m}m` : (m > 0 ? `${m}m ${s}s` : `${s}s`);
     };
     const timerColor = timerRemaining !== null && timerRemaining <= 300 ? theme.colors.loss : theme.colors.warning;
+    // Break-even badge follows the actual protection, however it got there: applied
+    // ("BE ✓") by the auto rule, "Break-even now", or an SL moved to/past entry by
+    // hand or by trailing; armed ("BE 0.5%" / "BE 10p") while the auto rule waits.
+    const slAtOrPastEntry = item.sl > 0 && (item.type === 0 ? item.sl >= item.openPrice : item.sl <= item.openPrice);
+    const beApplied = !!item.breakevenTriggered || slAtOrPastEntry;
+    const beArmedLabel = item.breakevenUsePercent
+      ? `BE ${item.breakevenPercent ?? 0}%`
+      : `BE ${item.breakevenThreshold ?? 0}p`;
     return (
     <TouchableOpacity
       style={[styles.positionCard, { backgroundColor: theme.colors.card }]}
@@ -321,10 +331,10 @@ export default function PositionsScreen() {
             {item.profit >= 0 ? '+' : ''}{formatCurrency(item.profit)}
           </Text>
           <View style={styles.badgesRow}>
-            {item.breakevenEnabled && (
+            {(beApplied || item.breakevenEnabled) && (
               <View style={[styles.miniBadge, { backgroundColor: theme.colors.success + '22' }]}>
                 <Text style={[styles.miniBadgeText, { color: theme.colors.success }]}>
-                  {item.breakevenTriggered ? 'BE ✓' : 'BE'}
+                  {beApplied ? 'BE ✓' : beArmedLabel}
                 </Text>
               </View>
             )}

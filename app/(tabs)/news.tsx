@@ -1,13 +1,26 @@
 import React, { useState, useEffect } from 'react';
 import { StyleSheet, View, Text, FlatList, TouchableOpacity, ActivityIndicator, RefreshControl } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { database } from '@/firebaseConfig';
+import { database, authReady } from '@/firebaseConfig';
 import { ref, onValue } from 'firebase/database';
 import { useTheme } from '@/contexts/ThemeContext';
 import { IconSymbol } from '@/components/ui/icon-symbol';
+import { terminalLabel } from '@/components/TerminalStatus';
 
-// Economic-calendar event as populated by the EA at `calendar/events`
-// (single shared node — no account scoping). The app only READS this.
+// How one instrument moved after a release (from MT5 minute bars): % change 15 and
+// 60 minutes after the release, plus pips for FX pairs.
+interface Reaction {
+  m15?: number;
+  m60?: number;
+  p15?: number;
+  p60?: number;
+}
+
+// Economic-calendar event as populated by the NewsFeed EA at `calendar/events`
+// (single shared node — no account scoping; the EA also stamps
+// `calendar/updatedAt` + `calendar/by`, and fills `calendar/extra/{id}` with the
+// actual value from MT5's calendar and the price reactions once released). The app
+// only READS this.
 interface CalendarEvent {
   id: string;
   title: string;
@@ -17,6 +30,9 @@ interface CalendarEvent {
   forecast: string;
   previous: string;
   actual: string;
+  actualImpact?: 'positive' | 'negative';   // MT5's verdict for the currency
+  higherIsBetter?: boolean;                  // indicator direction (from MT5)
+  reactions?: Record<string, Reaction>;
 }
 
 const IMPACT_FILTERS = ['All', 'High', 'High+Med'] as const;
@@ -39,7 +55,26 @@ const CURRENCY_INSTRUMENTS: Record<string, string[]> = {
 };
 
 const DAY_SECS = 86400;
+// The EA re-fetches hourly (checking every 5 min), so older than this = feed down.
+const STALE_SECS = 2 * 3600;
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+// "12 min", "3 h", "2 days"
+const durationText = (secs: number) => {
+  if (secs < 3600) return `${Math.max(1, Math.floor(secs / 60))} min`;
+  if (secs < DAY_SECS) return `${Math.floor(secs / 3600)} h`;
+  const d = Math.floor(secs / DAY_SECS);
+  return `${d} day${d === 1 ? '' : 's'}`;
+};
+const agoText = (secs: number) => (secs < 60 ? 'just now' : `${durationText(secs)} ago`);
+
+// "3.7%" -> 3.7, "225K" -> 225000, "-6.2B" -> -6.2e9; null when not a number.
+const calNumber = (s: string): number | null => {
+  const m = /^\s*([-+]?\d*\.?\d+)\s*([KMBT])?\s*%?\s*$/i.exec(s || '');
+  if (!m) return null;
+  const mult = { K: 1e3, M: 1e6, B: 1e9, T: 1e12 }[(m[2] || '').toUpperCase() as 'K' | 'M' | 'B' | 'T'] ?? 1;
+  return parseFloat(m[1]) * mult;
+};
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 // Local midnight (device time) for the day containing `ts` (unix seconds).
@@ -58,6 +93,9 @@ export default function NewsScreen() {
   const { theme } = useTheme();
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
+  const [updatedAt, setUpdatedAt] = useState<number | null>(null);
+  const [updatedBy, setUpdatedBy] = useState('');
   const [impactFilter, setImpactFilter] = useState<ImpactFilter>('High+Med');
   const [scopeFilter, setScopeFilter] = useState<ScopeFilter>('This week');
   const [refreshing, setRefreshing] = useState(false);
@@ -71,25 +109,53 @@ export default function NewsScreen() {
   }, []);
 
   useEffect(() => {
-    // Shared node — read directly, not under an account.
-    const eventsRef = ref(database, 'calendar/events');
+    // Shared node — read directly, not under an account. Wait for sign-in so the
+    // first read isn't rejected as "permission denied" (which cancels the listener).
+    const calendarRef = ref(database, 'calendar');
+    let cancelled = false;
+    let unsubscribe = () => {};
 
     const onDataChange = (snapshot: any) => {
-      const val = snapshot.val();
-      if (val) {
+      const cal = snapshot.val() || {};
+      const val = cal.events;
+      const extra = cal.extra && typeof cal.extra === 'object' ? cal.extra : {};
+      if (val && typeof val === 'object') {
         const list: CalendarEvent[] = Object.keys(val)
-          .map(key => ({ id: key, ...val[key] }))
+          .map(key => {
+            const x = extra[key] || {};
+            return {
+              id: key,
+              ...val[key],
+              actual: val[key]?.actual || x.actual || '',
+              actualImpact: x.actualImpact,
+              higherIsBetter: typeof x.higherIsBetter === 'boolean' ? x.higherIsBetter : undefined,
+              reactions: x.reactions && typeof x.reactions === 'object' ? x.reactions : undefined,
+            };
+          })
           .filter((item: any) => item && item.title && typeof item.timestamp === 'number')
           .sort((a: CalendarEvent, b: CalendarEvent) => a.timestamp - b.timestamp);
         setEvents(list);
       } else {
         setEvents([]);
       }
+      setUpdatedAt(typeof cal.updatedAt === 'number' ? cal.updatedAt : null);
+      setUpdatedBy(typeof cal.by === 'string' ? cal.by : '');
+      setLoadError(false);
       setLoading(false);
     };
 
-    const unsubscribe = onValue(eventsRef, onDataChange);
-    return () => unsubscribe();
+    authReady.then(() => {
+      if (cancelled) return;
+      unsubscribe = onValue(calendarRef, onDataChange, (error) => {
+        console.error('Failed to read the calendar:', error);
+        setLoadError(true);
+        setLoading(false);
+      });
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
   }, []);
 
   const impactColor = (impact: string) => {
@@ -150,6 +216,24 @@ export default function NewsScreen() {
 
   const rows = buildRows();
 
+  // Feed health: when the EA last published the calendar.
+  const feedAge = updatedAt !== null ? Math.max(0, nowSec - updatedAt) : null;
+  const feedStale = feedAge !== null && feedAge > STALE_SECS;
+
+  // Why the list is empty, in plain words: the data can exist yet be all in the
+  // past (end of the week, before Forex Factory publishes the next one on Sunday).
+  const impactWords = impactFilter === 'High' ? 'high-impact ' : impactFilter === 'High+Med' ? 'high/medium-impact ' : '';
+  const weekOver = events.length > 0 && events[events.length - 1].timestamp < nowSec;
+  const empty = loadError
+    ? { title: "Couldn't load the calendar", hint: 'Check your connection, then reopen this tab.' }
+    : events.length === 0
+      ? { title: 'No calendar data yet', hint: 'The News EA on your MT5 terminals publishes it every hour.' }
+      : scopeFilter === 'Today'
+        ? { title: `No ${impactWords}events today`, hint: 'Switch to This week to see what is coming up.' }
+        : weekOver
+          ? { title: "This week's events are done", hint: "Forex Factory publishes next week's calendar on Sunday." }
+          : { title: `No more ${impactWords}events this week`, hint: impactFilter !== 'All' ? 'Tap All to include lower-impact events.' : '' };
+
   // Countdown to the next upcoming high-impact event (device-local wording).
   const nextHigh = filteredEvents.find(
     e => (e.impact || '').toLowerCase() === 'high' && e.timestamp > nowSec
@@ -163,8 +247,22 @@ export default function NewsScreen() {
     return `in ${m}m`;
   };
 
-  // Compact "F: .. P: .. A: .." line, omitting blanks. Actual coloured green
-  // when it clearly beats the forecast (both numeric); neutral otherwise.
+  // Good or bad for the currency: judged against the forecast SHOWN, using the
+  // indicator's direction from MT5 (e.g. lower unemployment is good); MT5's own
+  // verdict when there's no comparable forecast; neutral when unknown.
+  const actualColor = (e: CalendarEvent) => {
+    const a = calNumber(e.actual);
+    const f = calNumber(e.forecast);
+    if (e.higherIsBetter !== undefined && a !== null && f !== null) {
+      if (a === f) return theme.colors.text;
+      return (a > f) === e.higherIsBetter ? theme.colors.profit : theme.colors.loss;
+    }
+    if (e.actualImpact === 'positive') return theme.colors.profit;
+    if (e.actualImpact === 'negative') return theme.colors.loss;
+    return theme.colors.text;
+  };
+
+  // Compact "F: .. P: .. A: .." line, omitting blanks.
   const renderStats = (e: CalendarEvent) => {
     const parts: React.ReactNode[] = [];
     if (e.forecast) parts.push(
@@ -174,24 +272,49 @@ export default function NewsScreen() {
       <Text key="p" style={[styles.statText, { color: theme.colors.textSecondary }]}>P: {e.previous}  </Text>
     );
     if (e.actual) {
-      const fNum = parseFloat(e.forecast);
-      const aNum = parseFloat(e.actual);
-      const beats = !isNaN(fNum) && !isNaN(aNum) && aNum > fNum;
       parts.push(
-        <Text key="a" style={[styles.statText, { color: beats ? theme.colors.profit : theme.colors.text, fontWeight: '700' }]}>A: {e.actual}</Text>
+        <Text key="a" style={[styles.statText, { color: actualColor(e), fontWeight: '800' }]}>A: {e.actual}</Text>
       );
     }
     if (parts.length === 0) return null;
     return <View style={styles.statsRow}>{parts}</View>;
   };
 
+  // "▲2.2 pips" for FX pairs, "▲0.13%" for indices / gold.
+  const moveText = (pct?: number, pips?: number) => {
+    const v = pips ?? pct;
+    if (v === undefined) return '—';
+    const arrow = v > 0 ? '▲' : v < 0 ? '▼' : '';
+    return pips !== undefined ? `${arrow}${Math.abs(pips).toFixed(1)} pips` : `${arrow}${Math.abs(v).toFixed(2)}%`;
+  };
+  const moveColor = (v?: number) =>
+    v === undefined || v === 0 ? theme.colors.textSecondary : v > 0 ? theme.colors.profit : theme.colors.loss;
+
+  // How each affected instrument moved 15 min (and 1 h) after the release.
+  const renderReaction = (sym: string, r: Reaction) => (
+    <View key={sym} style={[styles.reactionChip, { backgroundColor: theme.colors.input }]}>
+      <Text style={[styles.reactionSym, { color: theme.colors.text }]}>{sym}</Text>
+      <Text style={[styles.reactionMove, { color: moveColor(r.m15) }]}>
+        {moveText(r.m15, r.p15)}<Text style={[styles.reactionWhen, { color: theme.colors.textTertiary }]}>  15m</Text>
+      </Text>
+      {r.m60 !== undefined && (
+        <Text style={[styles.reactionMove, { color: moveColor(r.m60) }]}>
+          {moveText(r.m60, r.p60)}<Text style={[styles.reactionWhen, { color: theme.colors.textTertiary }]}>  1h</Text>
+        </Text>
+      )}
+    </View>
+  );
+
   const renderEvent = (e: CalendarEvent) => {
     const isPast = e.timestamp < nowSec;
     const impactClr = impactColor(e.impact);
     const instruments = CURRENCY_INSTRUMENTS[e.currency] || [];
+    const reacted = e.reactions ? instruments.filter(sym => e.reactions![sym]) : [];
+    // Released events with results stay readable; other past events fade out.
+    const opacity = !isPast ? 1 : e.actual || reacted.length > 0 ? 0.9 : 0.5;
 
     return (
-      <View style={[styles.card, { backgroundColor: theme.colors.card, opacity: isPast ? 0.5 : 1 }]}>
+      <View style={[styles.card, { backgroundColor: theme.colors.card, opacity }]}>
         <View style={styles.cardHeader}>
           <View style={styles.timeCol}>
             <Text style={[styles.timeText, { color: theme.colors.text }]}>{formatTime(e.timestamp)}</Text>
@@ -205,7 +328,12 @@ export default function NewsScreen() {
               <Text style={[styles.title, { color: theme.colors.text }]} numberOfLines={2}>{e.title}</Text>
             </View>
             {renderStats(e)}
-            {instruments.length > 0 && (
+            {reacted.length > 0 ? (
+              <View style={styles.reactions}>
+                <Text style={[styles.reactionCaption, { color: theme.colors.textTertiary }]}>PRICE REACTION</Text>
+                <View style={styles.reactionRow}>{reacted.map(sym => renderReaction(sym, e.reactions![sym]))}</View>
+              </View>
+            ) : instruments.length > 0 && (
               <Text style={[styles.affected, { color: theme.colors.textTertiary }]}>
                 Affected: {instruments.join(', ')}
               </Text>
@@ -264,6 +392,18 @@ export default function NewsScreen() {
         />
       </View>
 
+      {/* Feed freshness — makes a stopped News EA obvious */}
+      {feedAge !== null && (
+        <Text
+          style={[styles.freshness, { color: feedStale ? theme.colors.warning : theme.colors.textTertiary }]}
+          numberOfLines={2}
+        >
+          {feedStale
+            ? `Calendar not updated for ${durationText(feedAge)} — check that an MT5 terminal is running the News EA.`
+            : `Forex Factory · updated ${agoText(feedAge)}${updatedBy ? ` by ${terminalLabel(updatedBy)}` : ''}`}
+        </Text>
+      )}
+
       {/* Next high-impact countdown */}
       {nextHigh && (
         <View style={[styles.countdown, { backgroundColor: theme.colors.loss + '18' }]}>
@@ -286,7 +426,10 @@ export default function NewsScreen() {
           !loading ? (
             <View style={styles.emptyContainer}>
               <IconSymbol name="calendar" size={48} color={theme.colors.textTertiary} />
-              <Text style={[styles.emptyText, { color: theme.colors.textSecondary }]}>No calendar data yet</Text>
+              <Text style={[styles.emptyText, { color: theme.colors.textSecondary }]}>{empty.title}</Text>
+              {!!empty.hint && (
+                <Text style={[styles.emptyHint, { color: theme.colors.textTertiary }]}>{empty.hint}</Text>
+              )}
             </View>
           ) : (
             <ActivityIndicator style={{ marginTop: 40 }} size="large" color={theme.colors.primary} />
@@ -406,6 +549,40 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 6,
   },
+  reactions: {
+    marginTop: 10,
+  },
+  reactionCaption: {
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.6,
+    marginBottom: 6,
+  },
+  reactionRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  reactionChip: {
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    minWidth: 104,
+  },
+  reactionSym: {
+    fontSize: 12,
+    fontWeight: '800',
+    marginBottom: 2,
+  },
+  reactionMove: {
+    fontSize: 12,
+    fontWeight: '700',
+    fontFamily: 'monospace',
+  },
+  reactionWhen: {
+    fontSize: 10,
+    fontWeight: '600',
+  },
   emptyContainer: {
     alignItems: 'center',
     marginTop: 40,
@@ -413,5 +590,18 @@ const styles = StyleSheet.create({
   emptyText: {
     marginTop: 16,
     fontSize: 16,
+  },
+  emptyHint: {
+    marginTop: 6,
+    fontSize: 13,
+    textAlign: 'center',
+    paddingHorizontal: 32,
+  },
+  freshness: {
+    fontSize: 12,
+    fontWeight: '600',
+    marginHorizontal: 16,
+    marginTop: -4,
+    marginBottom: 10,
   },
 });

@@ -8,16 +8,18 @@ import {
   Switch,
   ScrollView,
   StyleSheet,
-  Alert,
   ActivityIndicator,
+  Platform,
 } from 'react-native';
 import { Position } from '@/constants/types';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useAccount } from '@/contexts/AccountContext';
 import { database } from '@/firebaseConfig';
-import { ref, set } from 'firebase/database';
+import { ref, set, onValue } from 'firebase/database';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { currencySymbol } from '@/utils/currency';
+import { showAlert } from '@/components/AppDialog';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 interface PositionManagementModalProps {
   visible: boolean;
@@ -35,6 +37,7 @@ export function PositionManagementModal({
   currency
 }: PositionManagementModalProps) {
   const { theme } = useTheme();
+  const insets = useSafeAreaInsets();
   const { selectedAccount } = useAccount();
   const [activeTab, setActiveTab] = useState<'breakeven' | 'trailing' | 'partial' | 'scale' | 'time'>('breakeven');
   const [isProcessing, setIsProcessing] = useState(false);
@@ -42,8 +45,10 @@ export function PositionManagementModal({
   // Break-even settings
   const [breakevenEnabled, setBreakevenEnabled] = useState(false);
   const [breakevenThreshold, setBreakevenThreshold] = useState('10');
-  const [breakevenMode, setBreakevenMode] = useState<'pips' | 'percent'>('pips');
+  // pips / percent = automatic at a profit threshold; now = move the SL to entry immediately
+  const [breakevenMode, setBreakevenMode] = useState<'pips' | 'percent' | 'now'>('pips');
   const [breakevenPercent, setBreakevenPercent] = useState('0.5');
+  const [beNowBusy, setBeNowBusy] = useState(false);
 
   // Trailing stop settings
   const [trailingEnabled, setTrailingEnabled] = useState(false);
@@ -77,7 +82,7 @@ export function PositionManagementModal({
 
   const sendCommand = async (action: string, payload: any) => {
     if (!selectedAccount) {
-      Alert.alert("Error", "No account selected");
+      showAlert("Error", "No account selected");
       return;
     }
 
@@ -92,7 +97,7 @@ export function PositionManagementModal({
       });
       return true;
     } catch {
-      Alert.alert("Error", "Failed to send command");
+      showAlert("Error", "Failed to send command");
       return false;
     } finally {
       setIsProcessing(false);
@@ -111,9 +116,104 @@ export function PositionManagementModal({
     });
 
     if (success) {
-      Alert.alert("Success", `Break-even ${breakevenEnabled ? 'enabled' : 'disabled'} for position ${position.ticket}`);
+      showAlert("Success", `Break-even ${breakevenEnabled ? 'enabled' : 'disabled'} for position ${position.ticket}`);
       onUpdate();
     }
+  };
+
+  // Break-even NOW: the Bridge EA moves the SL to entry immediately and answers on
+  // the same command node (status EXECUTED / FAILED + a plain-English message).
+  const handleBreakevenNow = async () => {
+    if (!position) return;
+    if (!selectedAccount) {
+      showAlert("Error", "No account selected");
+      return;
+    }
+    setBeNowBusy(true);
+    const sentAt = Math.floor(Date.now() / 1000);
+    const commandRef = ref(database, `commands/${selectedAccount}/latest`);
+    try {
+      await set(commandRef, { action: 'BREAKEVEN_NOW', ticket: position.ticket, status: 'PENDING', timestamp: sentAt });
+    } catch {
+      setBeNowBusy(false);
+      showAlert("Error", "Failed to send the command. Check your connection.");
+      return;
+    }
+
+    let done = false;
+    let unsubscribe = () => {};
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (title: string, message: string, variant: 'success' | 'error' | 'info') => {
+      if (done) return;
+      done = true;
+      unsubscribe();
+      if (timer) clearTimeout(timer);
+      setBeNowBusy(false);
+      showAlert(title, message, undefined, { variant });
+      if (variant === 'success') onUpdate();
+    };
+    unsubscribe = onValue(commandRef, (snap) => {
+      const c = snap.val();
+      if (!c || c.action !== 'BREAKEVEN_NOW' || c.timestamp !== sentAt) return;   // not our command (yet)
+      if (c.status === 'EXECUTED') finish('Break-even set', c.message || 'Stop loss moved to entry.', 'success');
+      else if (c.status === 'FAILED') finish("Couldn't move the stop", c.message || 'The EA could not apply break-even.', 'error');
+    });
+    timer = setTimeout(
+      () => finish('Sent to the EA', "The EA hasn't confirmed yet (it may be offline). Check the position's stop loss in a moment.", 'info'),
+      25000,
+    );
+  };
+
+  // "Now" panel: where the trade stands against its entry, and one button to lock break-even.
+  const renderBreakevenNow = () => {
+    if (!position) return null;
+    const isBuy = position.type === 0;
+    const open = position.openPrice;
+    const move = isBuy ? position.currentPrice - open : open - position.currentPrice;
+    const movePct = open ? (move / open) * 100 : 0;
+    const alreadyProtected = position.sl > 0 && (isBuy ? position.sl >= open : position.sl <= open);
+    const inProfit = move > 0;
+    const decimals = Math.min(5, (String(open).split('.')[1] || '').length);
+    const fmt = (v: number) => v.toFixed(decimals);
+    const state = alreadyProtected
+      ? { text: 'Already protected: your stop loss is at or beyond entry.', color: theme.colors.profit }
+      : inProfit
+        ? { text: `In profit by ${movePct.toFixed(2)}%, ready to lock in break-even.`, color: theme.colors.profit }
+        : { text: `Not in profit yet (${movePct.toFixed(2)}%). Break-even is possible once price moves past your entry.`, color: theme.colors.warning };
+    const disabled = beNowBusy || alreadyProtected || !inProfit;
+
+    return (
+      <View>
+        <Text style={[styles.description, { color: theme.colors.textSecondary }]}>
+          Moves the stop loss to your entry price right away, with no profit target to wait for. The broker only
+          accepts it while the trade is in profit by at least its minimum stop distance.
+        </Text>
+        <View style={[styles.nowStats, { backgroundColor: theme.colors.input }]}>
+          {[
+            ['Entry', fmt(open)],
+            ['Price now', fmt(position.currentPrice)],
+            ['Stop loss', position.sl > 0 ? fmt(position.sl) : 'None'],
+          ].map(([label, value]) => (
+            <View key={label} style={styles.nowStat}>
+              <Text style={[styles.nowStatLabel, { color: theme.colors.textTertiary }]}>{label}</Text>
+              <Text style={[styles.nowStatValue, { color: theme.colors.text }]}>{value}</Text>
+            </View>
+          ))}
+        </View>
+        <Text style={[styles.nowState, { color: state.color }]}>{state.text}</Text>
+        <TouchableOpacity
+          style={[styles.saveButton, { backgroundColor: theme.colors.primary, opacity: disabled ? 0.5 : 1 }]}
+          onPress={handleBreakevenNow}
+          disabled={disabled}
+        >
+          {beNowBusy ? (
+            <ActivityIndicator color="#fff" />
+          ) : (
+            <Text style={styles.saveButtonText}>Move SL to Entry Now</Text>
+          )}
+        </TouchableOpacity>
+      </View>
+    );
   };
 
   const handleTrailingSave = async () => {
@@ -126,7 +226,7 @@ export function PositionManagementModal({
     });
 
     if (success) {
-      Alert.alert("Success", `Trailing stop ${trailingEnabled ? 'enabled' : 'disabled'} for position ${position.ticket}`);
+      showAlert("Success", `Trailing stop ${trailingEnabled ? 'enabled' : 'disabled'} for position ${position.ticket}`);
       onUpdate();
     }
   };
@@ -134,7 +234,7 @@ export function PositionManagementModal({
   const handlePartialClose = async () => {
     if (!position) return;
 
-    Alert.alert(
+    showAlert(
       "Confirm Partial Close",
       `Close ${partialPercentage}% of position ${position.ticket}?`,
       [
@@ -149,7 +249,7 @@ export function PositionManagementModal({
             });
 
             if (success) {
-              Alert.alert("Success", `Partial close order sent for ${partialPercentage}%`);
+              showAlert("Success", `Partial close order sent for ${partialPercentage}%`);
               onUpdate();
               onClose();
             }
@@ -162,7 +262,7 @@ export function PositionManagementModal({
   const handleScaleIn = async () => {
     if (!position) return;
 
-    Alert.alert(
+    showAlert(
       "Confirm Scale-In",
       `Add ${scaleInMultiplier}x lots to position ${position.ticket}?`,
       [
@@ -177,7 +277,7 @@ export function PositionManagementModal({
             });
 
             if (success) {
-              Alert.alert("Success", `Scale-in order sent with ${scaleInMultiplier}x multiplier`);
+              showAlert("Success", `Scale-in order sent with ${scaleInMultiplier}x multiplier`);
               onUpdate();
               onClose();
             }
@@ -198,7 +298,15 @@ export function PositionManagementModal({
       presentationStyle="pageSheet"
       onRequestClose={onClose}
     >
-      <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
+      {/* Full-screen on Android (pageSheet is iOS-only), drawn edge to edge: keep the
+          header below the status bar and the content above the navigation bar. */}
+      <View
+        style={[
+          styles.container,
+          { backgroundColor: theme.colors.background },
+          Platform.OS === 'android' && { paddingTop: insets.top, paddingBottom: insets.bottom },
+        ]}
+      >
         {/* Header */}
         <View style={[styles.header, { borderBottomColor: theme.colors.border }]}>
           <View>
@@ -257,25 +365,9 @@ export function PositionManagementModal({
           {activeTab === 'breakeven' && (
             <View style={styles.tabContent}>
               <View style={[styles.card, { backgroundColor: theme.colors.card }]}>
-                <View style={styles.settingRow}>
-                  <Text style={[styles.settingLabel, { color: theme.colors.text }]}>
-                    Enable Break-Even
-                  </Text>
-                  <Switch
-                    value={breakevenEnabled}
-                    onValueChange={setBreakevenEnabled}
-                    trackColor={{ false: theme.colors.input, true: theme.colors.primary }}
-                    thumbColor="#FFF"
-                  />
-                </View>
-
-                <Text style={[styles.description, { color: theme.colors.textSecondary }]}>
-                  Move stop loss to entry price when the trade reaches the threshold below
-                </Text>
-
-                {/* Mode: pips vs percent (percent = price move from entry, handy when pips differ per symbol) */}
+                {/* Mode: pips / percent (automatic, at a profit threshold) or now (immediately) */}
                 <View style={styles.modeToggle}>
-                  {(['pips', 'percent'] as const).map((mode) => (
+                  {(['pips', 'percent', 'now'] as const).map((mode) => (
                     <TouchableOpacity
                       key={mode}
                       style={[
@@ -289,13 +381,35 @@ export function PositionManagementModal({
                         styles.modeButtonText,
                         { color: breakevenMode === mode ? '#fff' : theme.colors.text }
                       ]}>
-                        {mode === 'pips' ? 'Pips' : 'Percent'}
+                        {mode === 'pips' ? 'Pips' : mode === 'percent' ? 'Percent' : 'Now'}
                       </Text>
                     </TouchableOpacity>
                   ))}
                 </View>
 
-                {breakevenMode === 'pips' ? (
+                {breakevenMode !== 'now' && (
+                  <>
+                    <View style={styles.settingRow}>
+                      <Text style={[styles.settingLabel, { color: theme.colors.text }]}>
+                        Enable Break-Even
+                      </Text>
+                      <Switch
+                        value={breakevenEnabled}
+                        onValueChange={setBreakevenEnabled}
+                        trackColor={{ false: theme.colors.input, true: theme.colors.primary }}
+                        thumbColor="#FFF"
+                      />
+                    </View>
+
+                    <Text style={[styles.description, { color: theme.colors.textSecondary }]}>
+                      Move stop loss to entry price when the trade reaches the threshold below
+                    </Text>
+                  </>
+                )}
+
+                {breakevenMode === 'now' ? (
+                  renderBreakevenNow()
+                ) : breakevenMode === 'pips' ? (
                   <View style={styles.inputGroup}>
                     <Text style={[styles.inputLabel, { color: theme.colors.text }]}>
                       Profit Threshold (pips)
@@ -331,22 +445,24 @@ export function PositionManagementModal({
                       placeholderTextColor={theme.colors.textTertiary}
                     />
                     <Text style={[styles.description, { color: theme.colors.textTertiary, marginTop: 6, marginBottom: 0 }]}>
-                      e.g. 0.5 = SL moves to entry once price is 0.5% in profit
+                      e.g. 0.5 = SL moves to entry once price has moved 0.5% in your favour from entry
                     </Text>
                   </View>
                 )}
 
-                <TouchableOpacity
-                  style={[styles.saveButton, { backgroundColor: theme.colors.primary, opacity: isProcessing ? 0.7 : 1 }]}
-                  onPress={handleBreakevenSave}
-                  disabled={isProcessing}
-                >
-                  {isProcessing ? (
-                    <ActivityIndicator color="#fff" />
-                  ) : (
-                    <Text style={styles.saveButtonText}>Save Break-Even Settings</Text>
-                  )}
-                </TouchableOpacity>
+                {breakevenMode !== 'now' && (
+                  <TouchableOpacity
+                    style={[styles.saveButton, { backgroundColor: theme.colors.primary, opacity: isProcessing ? 0.7 : 1 }]}
+                    onPress={handleBreakevenSave}
+                    disabled={isProcessing}
+                  >
+                    {isProcessing ? (
+                      <ActivityIndicator color="#fff" />
+                    ) : (
+                      <Text style={styles.saveButtonText}>Save Break-Even Settings</Text>
+                    )}
+                  </TouchableOpacity>
+                )}
               </View>
             </View>
           )}
@@ -569,7 +685,7 @@ export function PositionManagementModal({
                     });
 
                     if (success) {
-                      Alert.alert("Success", `Time limit set to ${timeLimit} hours for position ${position.ticket}`);
+                      showAlert("Success", `Time limit set to ${timeLimit} hours for position ${position.ticket}`);
                       onUpdate();
                     }
                   }}
@@ -733,6 +849,33 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     fontWeight: 'bold',
+  },
+  nowStats: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    marginBottom: 12,
+  },
+  nowStat: {
+    alignItems: 'flex-start',
+  },
+  nowStatLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.4,
+    marginBottom: 4,
+  },
+  nowStatValue: {
+    fontSize: 15,
+    fontWeight: '800',
+    fontFamily: 'monospace',
+  },
+  nowState: {
+    fontSize: 13,
+    fontWeight: '600',
+    marginBottom: 4,
   },
   actionButton: {
     paddingVertical: 14,
