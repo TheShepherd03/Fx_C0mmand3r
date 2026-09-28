@@ -85,17 +85,20 @@ const lightTheme: Theme = {
   isDark: false,
 };
 
+// Pure-black (OLED) dark mode with neutral greys — no navy tint. Shadows are
+// invisible on black, so surfaces step up in lightness instead:
+// page #000 -> card #111113 -> input/chip #1C1C1F -> border #26262B.
 const darkTheme: Theme = {
   colors: {
-    background: '#0F172A', // Slate 900
-    surface: '#1E293B',    // Slate 800
-    card: '#1E293B',       // Slate 800
+    background: '#000000', // Pure black
+    surface: '#111113',
+    card: '#111113',
     overlay: 'rgba(0, 0, 0, 0.7)',
-    input: '#334155',      // Slate 700
+    input: '#1C1C1F',
 
-    text: '#F8FAFC',       // Slate 50
-    textSecondary: '#94A3B8', // Slate 400
-    textTertiary: '#64748B',  // Slate 500
+    text: '#FAFAFA',          // Zinc 50
+    textSecondary: '#A1A1AA', // Zinc 400
+    textTertiary: '#71717A',  // Zinc 500
 
     primary: '#3B82F6',    // Blue 500
     primaryText: '#FFFFFF',
@@ -106,12 +109,12 @@ const darkTheme: Theme = {
     warning: '#F59E0B',    // Amber 500
     info: '#3B82F6',       // Blue 500
 
-    border: '#334155',     // Slate 700
-    divider: '#334155',    // Slate 700
+    border: '#26262B',
+    divider: '#1C1C1F',
 
     buttonBackground: '#3B82F6',
     buttonText: '#FFFFFF',
-    buttonSecondary: '#334155',
+    buttonSecondary: '#1C1C1F',
 
     profit: '#10B981',
     loss: '#EF4444',

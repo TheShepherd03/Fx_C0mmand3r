@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useReducer } from 'react';
-import { StyleSheet, View, Text, FlatList, TouchableOpacity, Alert, ActivityIndicator, TextInput, RefreshControl, Pressable } from 'react-native';
+import { StyleSheet, View, Text, FlatList, TouchableOpacity, ActivityIndicator, TextInput, RefreshControl, Pressable } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { database } from '@/firebaseConfig';
@@ -22,6 +22,7 @@ import {
   saveSymbolMuted,
   useSignalPrefs,
 } from '@/components/SignalSettingsSheet';
+import { showAlert } from '@/components/AppDialog';
 
 const FILTERS = ['All Signals', 'Pending', 'Winning'];
 const SNOOZE_SECS = 3600; // "Snooze 1h"
@@ -148,7 +149,7 @@ export default function SignalsScreen() {
 
   const executeSignal = (signal: Signal) => {
     if (!selectedAccount) {
-      Alert.alert("Error", "No account selected.");
+      showAlert("Error", "No account selected.");
       return;
     }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
@@ -185,7 +186,7 @@ export default function SignalsScreen() {
       setExecVisible(false);
       setExecSignal(null);
     } catch {
-      Alert.alert("Error", "Failed to execute signal.");
+      showAlert("Error", "Failed to execute signal.");
     } finally {
       setExecutingIds(prev => {
         const newSet = new Set(prev);
@@ -215,7 +216,7 @@ export default function SignalsScreen() {
     keys.forEach(k => { patch[`${k}/dismissed`] = true; });
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
     update(ref(database, `signals/${acct}`), patch)
-      .catch(() => Alert.alert('Error', 'Could not dismiss. Check your connection and try again.'));
+      .catch(() => showAlert('Error', 'Could not dismiss. Check your connection and try again.'));
     showToast(message, () => {
       const undo: Record<string, null> = {};
       keys.forEach(k => { undo[`${k}/dismissed`] = null; });
@@ -233,7 +234,7 @@ export default function SignalsScreen() {
     const acct = selectedAccount;
     const until = Math.floor(Date.now() / 1000) + SNOOZE_SECS;
     update(ref(database, `signals/${acct}`), { [`${s.id}/snoozedUntil`]: until })
-      .catch(() => Alert.alert('Error', 'Could not snooze. Check your connection and try again.'));
+      .catch(() => showAlert('Error', 'Could not snooze. Check your connection and try again.'));
     showToast(`Snoozed ${s.symbol} until ${clockTime(until)}`, () => {
       update(ref(database, `signals/${acct}`), { [`${s.id}/snoozedUntil`]: null }).catch(() => {});
     });
@@ -242,7 +243,7 @@ export default function SignalsScreen() {
   const muteSymbol = (s: InboxSignal) => {
     const symbol = s.symbol;
     saveSymbolMuted(symbol, true)
-      .catch(() => Alert.alert('Error', 'Could not mute that symbol. Check your connection.'));
+      .catch(() => showAlert('Error', 'Could not mute that symbol. Check your connection.'));
     showToast(`Muted ${symbol}`, () => { saveSymbolMuted(symbol, false).catch(() => {}); });
   };
 
@@ -250,7 +251,7 @@ export default function SignalsScreen() {
     if (!s.source) return;
     const source = s.source;
     saveSourcePrefs(source, { feed: false })
-      .catch(() => Alert.alert('Error', 'Could not hide that source. Check your connection.'));
+      .catch(() => showAlert('Error', 'Could not hide that source. Check your connection.'));
     showToast(`Hid ${source} from the feed`, () => { saveSourcePrefs(source, { feed: true }).catch(() => {}); });
   };
 

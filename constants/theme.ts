@@ -17,12 +17,13 @@ export const Colors = {
     tabIconDefault: '#94A3B8', // Slate 400
     tabIconSelected: tintColorLight,
   },
+  // Mirrors the pure-black dark palette in contexts/ThemeContext.tsx.
   dark: {
-    text: '#F8FAFC',       // Slate 50
-    background: '#0F172A', // Slate 900
+    text: '#FAFAFA',       // Zinc 50
+    background: '#000000', // Pure black
     tint: tintColorDark,
-    icon: '#94A3B8',       // Slate 400
-    tabIconDefault: '#64748B', // Slate 500
+    icon: '#A1A1AA',       // Zinc 400
+    tabIconDefault: '#71717A', // Zinc 500
     tabIconSelected: tintColorDark,
   },
 };

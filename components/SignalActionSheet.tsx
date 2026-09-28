@@ -37,6 +37,8 @@ export function SignalActionSheet({ visible, title, subtitle, actions, onClose }
           style={[
             styles.sheet,
             { backgroundColor: theme.colors.card, paddingBottom: Math.max(insets.bottom, 12) + 12 },
+            // No shadow on black — a hairline keeps the sheet's edge visible in dark mode.
+            theme.isDark && { borderWidth: StyleSheet.hairlineWidth, borderBottomWidth: 0, borderColor: theme.colors.border },
           ]}>
           <View style={styles.grabber}>
             <View style={[styles.grabberBar, { backgroundColor: theme.colors.border }]} />

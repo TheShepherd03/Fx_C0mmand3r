@@ -1,5 +1,5 @@
 import React from 'react';
-import { StyleSheet, View, Text, ScrollView, Dimensions, RefreshControl } from 'react-native';
+import { StyleSheet, View, Text, ScrollView, Dimensions, RefreshControl, TouchableOpacity } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAccountData } from '@/hooks/useAccountData';
 import { useHistoryData } from '@/hooks/useHistoryData';
@@ -11,7 +11,7 @@ import { useTheme } from '@/contexts/ThemeContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { usePrivacy } from '@/contexts/PrivacyContext';
 import { IconSymbol } from '@/components/ui/icon-symbol';
-import { Alert, TouchableOpacity } from 'react-native';
+import { showAlert } from '@/components/AppDialog';
 import { totalRisk as computeTotalRisk } from '@/utils/positionMath';
 import { currencySymbol } from '@/utils/currency';
 
@@ -23,7 +23,7 @@ export default function DashboardScreen() {
   const { signOut } = useAuth();
 
   const confirmSignOut = () => {
-    Alert.alert('Sign Out', 'Sign out of Command0r?', [
+    showAlert('Sign Out', 'Sign out of Command0r?', [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Sign Out', style: 'destructive', onPress: () => signOut() },
     ]);

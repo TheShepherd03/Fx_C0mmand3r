@@ -1,8 +1,9 @@
 import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { Picker } from '@react-native-picker/picker';
 import { useAccount } from '@/contexts/AccountContext';
 import { useTheme } from '@/contexts/ThemeContext';
+import { showAlert } from '@/components/AppDialog';
 
 export function AccountSelector() {
   const { selectedAccount, availableAccounts, setSelectedAccount, removeAccount, loading } = useAccount();
@@ -10,7 +11,7 @@ export function AccountSelector() {
 
   const handleRemoveAccount = (accountId: string) => {
     const displayName = accountId.replace(/_/g, ' ');
-    Alert.alert(
+    showAlert(
       "Remove Account",
       `Are you sure you want to remove "${displayName}"? This will delete all data for this account and cannot be undone.`,
       [
@@ -21,9 +22,9 @@ export function AccountSelector() {
           onPress: async () => {
             try {
               await removeAccount(accountId);
-              Alert.alert("Success", "Account removed successfully");
+              showAlert("Success", "Account removed successfully");
             } catch {
-              Alert.alert("Error", "Failed to remove account. Please try again.");
+              showAlert("Error", "Failed to remove account. Please try again.");
             }
           }
         }

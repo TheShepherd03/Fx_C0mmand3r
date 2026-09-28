@@ -92,7 +92,13 @@ export function ExecuteSignalModal({ signal, balance, initialLots, visible, busy
     <Modal animationType="slide" transparent visible={visible} onRequestClose={onClose}>
       <View style={[styles.overlay, { backgroundColor: theme.colors.overlay }]}>
         <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
-        <View style={[styles.sheet, { backgroundColor: theme.colors.card }]}>
+        <View
+          style={[
+            styles.sheet,
+            { backgroundColor: theme.colors.card },
+            // No shadow on black — a hairline keeps the sheet's edge visible in dark mode.
+            theme.isDark && { borderWidth: StyleSheet.hairlineWidth, borderBottomWidth: 0, borderColor: theme.colors.border },
+          ]}>
           <View style={styles.grabber}><View style={[styles.grabberBar, { backgroundColor: theme.colors.border }]} /></View>
           <ScrollView contentContainerStyle={{ paddingBottom: 28 }} keyboardShouldPersistTaps="handled">
             <View style={styles.header}>

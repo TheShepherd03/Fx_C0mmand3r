@@ -4,7 +4,6 @@ import {
   Text,
   TouchableOpacity,
   StyleSheet,
-  Alert,
   ScrollView,
   Switch,
   TextInput,
@@ -13,6 +12,7 @@ import { useTheme } from '@/contexts/ThemeContext';
 import { useAccount } from '@/contexts/AccountContext';
 import { database } from '@/firebaseConfig';
 import { ref, set, get } from 'firebase/database';
+import { showAlert } from '@/components/AppDialog';
 
 interface EASettings {
   // Position Management
@@ -70,7 +70,7 @@ export function EASettingsManager({ onUpdate }: EASettingsManagerProps) {
         setSettings(defaultSettings);
       }
     } catch {
-      Alert.alert("Error", "Failed to load EA settings");
+      showAlert("Error", "Failed to load EA settings");
     } finally {
       setLoading(false);
     }
@@ -82,7 +82,7 @@ export function EASettingsManager({ onUpdate }: EASettingsManagerProps) {
 
   const saveSettings = async () => {
     if (!selectedAccount) {
-      Alert.alert("Error", "No account selected");
+      showAlert("Error", "No account selected");
       return;
     }
 
@@ -95,10 +95,10 @@ export function EASettingsManager({ onUpdate }: EASettingsManagerProps) {
       });
 
       setHasChanges(false);
-      Alert.alert("Success", "EA settings saved successfully. The EA will load these settings within 10 seconds.");
+      showAlert("Success", "EA settings saved successfully. The EA will load these settings within 10 seconds.");
       onUpdate();
     } catch {
-      Alert.alert("Error", "Failed to save EA settings");
+      showAlert("Error", "Failed to save EA settings");
     } finally {
       setLoading(false);
     }
@@ -110,7 +110,7 @@ export function EASettingsManager({ onUpdate }: EASettingsManagerProps) {
   };
 
   const resetToDefaults = () => {
-    Alert.alert(
+    showAlert(
       "Reset Settings",
       "Reset all EA settings to defaults?",
       [

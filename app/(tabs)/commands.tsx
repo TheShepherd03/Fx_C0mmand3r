@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { StyleSheet, View, Text, TouchableOpacity, Alert, Switch, ScrollView, TextInput } from 'react-native';
+import { StyleSheet, View, Text, TouchableOpacity, Switch, ScrollView, TextInput } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { database } from '@/firebaseConfig';
 import { ref, set, get, update } from 'firebase/database';
@@ -11,6 +11,7 @@ import { useTheme } from '@/contexts/ThemeContext';
 import { usePrivacy } from '@/contexts/PrivacyContext';
 import * as Haptics from 'expo-haptics';
 import { IconSymbol } from '@/components/ui/icon-symbol';
+import { showAlert } from '@/components/AppDialog';
 
 export default function CommandsScreen() {
   const { selectedAccount } = useAccount();
@@ -63,7 +64,7 @@ export default function CommandsScreen() {
 
   const sendCommand = async (action: string, payload: any = {}) => {
     if (!selectedAccount) {
-      Alert.alert("Error", "No account selected. Please select an account first.");
+      showAlert("Error", "No account selected. Please select an account first.");
       return;
     }
 
@@ -75,14 +76,14 @@ export default function CommandsScreen() {
         status: 'PENDING',
         timestamp: Math.floor(Date.now() / 1000)
       });
-      Alert.alert("Success", `Command ${action} sent.`);
+      showAlert("Success", `Command ${action} sent.`);
     } catch {
-      Alert.alert("Error", "Failed to send command.");
+      showAlert("Error", "Failed to send command.");
     }
   };
 
   const handlePause = () => {
-    Alert.alert(
+    showAlert(
       "Pause EA",
       "Pause the EA? It will stop managing trades (breakeven, trailing, etc.) until you resume.",
       [
@@ -106,7 +107,7 @@ export default function CommandsScreen() {
     if (val) {
       sendCommand('SET_EA_PAUSE', { immediate: false });
     } else {
-      Alert.alert(
+      showAlert(
         'Disable Auto-Trading',
         'Stop the EA from opening new trades? Open positions stay live and managed.',
         [
@@ -118,7 +119,7 @@ export default function CommandsScreen() {
   };
 
   const handleKillSwitch = () => {
-    Alert.alert(
+    showAlert(
       "⚠️ KILL SWITCH ACTIVATED",
       "This will immediately CLOSE ALL positions and PAUSE the EA. Are you sure?",
       [
@@ -149,9 +150,9 @@ export default function CommandsScreen() {
         lastUpdated: Math.floor(Date.now() / 1000)
       });
 
-      Alert.alert("Saved", "Configuration updated. The EA applies it within ~10s and it takes effect on trades opened from now on.");
+      showAlert("Saved", "Configuration updated. The EA applies it within ~10s and it takes effect on trades opened from now on.");
     } catch {
-      Alert.alert("Error", "Failed to save configuration.");
+      showAlert("Error", "Failed to save configuration.");
     }
   };
 

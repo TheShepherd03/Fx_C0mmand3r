@@ -4,7 +4,6 @@ import {
   Text,
   TouchableOpacity,
   StyleSheet,
-  Alert,
   ScrollView,
 } from 'react-native';
 import { EAScheduleSettings } from '@/constants/types';
@@ -12,6 +11,7 @@ import { useTheme } from '@/contexts/ThemeContext';
 import { useAccount } from '@/contexts/AccountContext';
 import { database } from '@/firebaseConfig';
 import { ref, set } from 'firebase/database';
+import { showAlert } from '@/components/AppDialog';
 
 interface EAScheduleManagerProps {
   currentSchedule?: EAScheduleSettings;
@@ -32,7 +32,7 @@ export function EAScheduleManager({ currentSchedule, onUpdate }: EAScheduleManag
 
   const sendCommand = async (action: string, payload: any) => {
     if (!selectedAccount) {
-      Alert.alert("Error", "No account selected");
+      showAlert("Error", "No account selected");
       return false;
     }
 
@@ -46,7 +46,7 @@ export function EAScheduleManager({ currentSchedule, onUpdate }: EAScheduleManag
       });
       return true;
     } catch {
-      Alert.alert("Error", "Failed to send command");
+      showAlert("Error", "Failed to send command");
       return false;
     }
   };
@@ -55,13 +55,13 @@ export function EAScheduleManager({ currentSchedule, onUpdate }: EAScheduleManag
     const success = await sendCommand('SET_EA_SCHEDULE', schedule);
 
     if (success) {
-      Alert.alert("Success", "EA Schedule updated successfully");
+      showAlert("Success", "EA Schedule updated successfully");
       onUpdate();
     }
   };
 
   const handleQuickPause = async (duration: number, label: string) => {
-    Alert.alert(
+    showAlert(
       "Confirm EA Pause",
       `Pause EA for ${label}? This will stop new trades.`,
       [
@@ -77,7 +77,7 @@ export function EAScheduleManager({ currentSchedule, onUpdate }: EAScheduleManag
             });
 
             if (success) {
-              Alert.alert("Success", `EA paused for ${label}`);
+              showAlert("Success", `EA paused for ${label}`);
               onUpdate();
             }
           }
@@ -92,7 +92,7 @@ export function EAScheduleManager({ currentSchedule, onUpdate }: EAScheduleManag
     });
 
     if (success) {
-      Alert.alert("Success", "EA resumed successfully");
+      showAlert("Success", "EA resumed successfully");
       onUpdate();
     }
   };

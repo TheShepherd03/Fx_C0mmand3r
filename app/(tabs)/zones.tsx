@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { StyleSheet, View, Text, FlatList, TouchableOpacity, Alert, ActivityIndicator, TextInput, Switch, ScrollView, KeyboardAvoidingView, Platform, Keyboard } from 'react-native';
+import { StyleSheet, View, Text, FlatList, TouchableOpacity, ActivityIndicator, TextInput, Switch, ScrollView, KeyboardAvoidingView, Platform, Keyboard } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams } from 'expo-router';
@@ -11,6 +11,7 @@ import { useTheme } from '@/contexts/ThemeContext';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { parseZoneStatus, zoneAlertLevel } from '@/components/ZoneChart';
 import { ZoneStatusPanel, zoneStateColor } from '@/components/ZoneStatusPanel';
+import { showAlert } from '@/components/AppDialog';
 
 // A supply/demand zone node as stored by the app and read by the MT5 EA at
 // `zones/{accountId}/{symbolKey}`. The app OWNS this node (writes it); the EA
@@ -269,11 +270,11 @@ export default function ZonesScreen() {
     const high = parseFloat(highDraft);
     const low = parseFloat(lowDraft);
     if (isNaN(high) || isNaN(low)) {
-      Alert.alert('Invalid zone', 'Enter numeric High and Low values.');
+      showAlert('Invalid zone', 'Enter numeric High and Low values.');
       return;
     }
     if (high === low) {
-      Alert.alert('Invalid zone', 'High and Low cannot be equal.');
+      showAlert('Invalid zone', 'High and Low cannot be equal.');
       return;
     }
     // Swap if entered the wrong way round so HIGH > LOW always holds.
@@ -290,16 +291,16 @@ export default function ZonesScreen() {
 
   const saveSymbol = async () => {
     if (!selectedAccount) {
-      Alert.alert('No account', 'Select an account first.');
+      showAlert('No account', 'Select an account first.');
       return;
     }
     const symbol = symbolInput.trim();
     if (!symbol) {
-      Alert.alert('Missing symbol', 'Type a symbol (e.g. XAUUSDb).');
+      showAlert('Missing symbol', 'Type a symbol (e.g. XAUUSDb).');
       return;
     }
     if (rows.length === 0) {
-      Alert.alert('No zones', 'Add at least one High/Low zone.');
+      showAlert('No zones', 'Add at least one High/Low zone.');
       return;
     }
     setSaving(true);
@@ -313,9 +314,9 @@ export default function ZonesScreen() {
       const nodeRef = ref(database, `zones/${selectedAccount}/${symbolKeyFor(symbol)}`);
       await set(nodeRef, node);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
-      Alert.alert('Saved', `Zones for ${symbol} saved.`);
+      showAlert('Saved', `Zones for ${symbol} saved.`);
     } catch {
-      Alert.alert('Error', 'Failed to save zones.');
+      showAlert('Error', 'Failed to save zones.');
     } finally {
       setSaving(false);
     }
@@ -325,7 +326,7 @@ export default function ZonesScreen() {
     if (!selectedAccount) return;
     const symbol = symbolInput.trim();
     if (!symbol) return;
-    Alert.alert(
+    showAlert(
       'Delete zones',
       `Remove all zones for "${symbol}"? This cannot be undone.`,
       [
@@ -339,7 +340,7 @@ export default function ZonesScreen() {
               Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
               clearEditor();
             } catch {
-              Alert.alert('Error', 'Failed to delete zones.');
+              showAlert('Error', 'Failed to delete zones.');
             }
           },
         },

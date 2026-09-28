@@ -7,7 +7,6 @@ import {
   TouchableOpacity,
   ScrollView,
   Pressable,
-  Alert,
   TextInput
 } from 'react-native';
 import { Position } from '@/constants/types';
@@ -15,6 +14,7 @@ import { useTheme } from '@/contexts/ThemeContext';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { riskToSL } from '@/utils/positionMath';
 import { currencySymbol } from '@/utils/currency';
+import { showAlert } from '@/components/AppDialog';
 
 interface PositionDetailsModalProps {
   position: Position | null;
@@ -105,7 +105,7 @@ export function PositionDetailsModal({ position, visible, onClose, onScalePositi
     if (!factor || factor <= 0) return;
     const current = parseFloat(field === 'sl' ? editableSL : editableTP);
     if (!current || current <= 0) {
-      Alert.alert(
+      showAlert(
         'Set a value first',
         `Enter a ${field === 'sl' ? 'Stop Loss' : 'Take Profit'} price before multiplying its distance from entry.`
       );
@@ -145,14 +145,14 @@ export function PositionDetailsModal({ position, visible, onClose, onScalePositi
   // Save SL/TP changes
   const handleSaveChanges = () => {
     if (!onModifySLTP) {
-      Alert.alert("Error", "SL/TP modification not available");
+      showAlert("Error", "SL/TP modification not available");
       return;
     }
 
     const sl = parseFloat(editableSL) || 0;
     const tp = parseFloat(editableTP) || 0;
 
-    Alert.alert(
+    showAlert(
       "Modify Position",
       `Update Stop Loss to ${sl > 0 ? formatPrice(sl) : 'None'} and Take Profit to ${tp > 0 ? formatPrice(tp) : 'None'}?`,
       [
@@ -232,7 +232,13 @@ export function PositionDetailsModal({ position, visible, onClose, onScalePositi
       <View style={[styles.overlay, { backgroundColor: theme.colors.overlay }]}>
         {/* Tap-outside-to-close sits BEHIND the sheet so it never intercepts scroll */}
         <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
-        <View style={[styles.modalContainer, { backgroundColor: theme.colors.card }]}>
+        <View
+          style={[
+            styles.modalContainer,
+            { backgroundColor: theme.colors.card },
+            // No shadow on black — a hairline keeps the sheet's edge visible in dark mode.
+            theme.isDark && { borderWidth: StyleSheet.hairlineWidth, borderBottomWidth: 0, borderColor: theme.colors.border },
+          ]}>
           <View style={styles.grabber}>
             <View style={[styles.grabberBar, { backgroundColor: theme.colors.border }]} />
           </View>
@@ -410,7 +416,7 @@ export function PositionDetailsModal({ position, visible, onClose, onScalePositi
                         key={factor}
                         style={[styles.scaleButton, { backgroundColor: theme.colors.input, borderColor: theme.colors.border }]}
                         onPress={() => {
-                          Alert.alert(
+                          showAlert(
                             "Scale Position",
                             `Open ${scaledLots} lot ${position.symbol} ${position.type === 0 ? 'BUY' : 'SELL'} position (${factor}x scale)?`,
                             [
@@ -447,7 +453,7 @@ export function PositionDetailsModal({ position, visible, onClose, onScalePositi
                     onPress={() => {
                       const lots = Math.round(parseFloat(scaleLots) * 100) / 100;
                       if (!(lots > 0)) return;
-                      Alert.alert(
+                      showAlert(
                         "Scale Position",
                         `Open ${lots.toFixed(2)} lot ${position.symbol} ${position.type === 0 ? 'BUY' : 'SELL'} position at market price?`,
                         [
@@ -536,9 +542,9 @@ export function PositionDetailsModal({ position, visible, onClose, onScalePositi
                     const lots = Math.round((parseFloat(hedgeLots) || 0) * 100) / 100;
                     const sl = parseFloat(hedgeSL) || 0;
                     const tp = parseFloat(hedgeTP) || 0;
-                    if (!(lots > 0)) { Alert.alert('Invalid lots', 'Enter a hedge lot size greater than 0.'); return; }
+                    if (!(lots > 0)) { showAlert('Invalid lots', 'Enter a hedge lot size greater than 0.'); return; }
                     const dir = position.type === 0 ? 'SELL' : 'BUY';
-                    Alert.alert(
+                    showAlert(
                       'Hedge Position',
                       `Open ${dir} ${lots.toFixed(2)} lot ${position.symbol} at market` +
                         `${sl > 0 ? `\nSL: ${sl}` : ''}${tp > 0 ? `\nTP: ${tp}` : ''}?`,

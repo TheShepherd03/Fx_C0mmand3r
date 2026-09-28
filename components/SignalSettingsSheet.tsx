@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Alert,
   Modal,
   Pressable,
   ScrollView,
@@ -17,6 +16,7 @@ import { get, limitToLast, onValue, query, ref, remove, set, update } from 'fire
 import { authReady, database } from '@/firebaseConfig';
 import { useTheme, type Theme } from '@/contexts/ThemeContext';
 import { IconSymbol } from '@/components/ui/icon-symbol';
+import { showAlert } from '@/components/AppDialog';
 
 type IconName = React.ComponentProps<typeof IconSymbol>['name'];
 
@@ -401,14 +401,14 @@ export function SignalSettingsSheet({ visible, onClose, prefs, account, feedSour
   const toggleSource = (source: string, field: 'feed' | 'notify', value: boolean) => {
     Haptics.selectionAsync().catch(() => {});
     saveSourcePrefs(source, { [field]: value }).catch(() =>
-      Alert.alert('Error', 'Could not save that setting. Check your connection.'),
+      showAlert('Error', 'Could not save that setting. Check your connection.'),
     );
   };
 
   const unmute = (key: string) => {
     Haptics.selectionAsync().catch(() => {});
     saveMutedSymbolKey(key, false).catch(() =>
-      Alert.alert('Error', 'Could not unmute that symbol. Check your connection.'),
+      showAlert('Error', 'Could not unmute that symbol. Check your connection.'),
     );
   };
 
@@ -432,7 +432,7 @@ export function SignalSettingsSheet({ visible, onClose, prefs, account, feedSour
     const q = pending.current;
     pending.current = null;
     if (q) {
-      saveQuiet(q).catch(() => Alert.alert('Error', 'Could not save quiet hours. Check your connection.'));
+      saveQuiet(q).catch(() => showAlert('Error', 'Could not save quiet hours. Check your connection.'));
     }
   }, []);
 
@@ -470,7 +470,13 @@ export function SignalSettingsSheet({ visible, onClose, prefs, account, feedSour
     <Modal animationType="slide" transparent visible={visible} onRequestClose={close}>
       <View style={[styles.overlay, { backgroundColor: theme.colors.overlay }]}>
         <Pressable style={StyleSheet.absoluteFill} onPress={close} accessibilityLabel="Close signal settings" />
-        <View style={[styles.sheet, { backgroundColor: theme.colors.card }]}>
+        <View
+          style={[
+            styles.sheet,
+            { backgroundColor: theme.colors.card },
+            // No shadow on black — a hairline keeps the sheet's edge visible in dark mode.
+            theme.isDark && { borderWidth: StyleSheet.hairlineWidth, borderBottomWidth: 0, borderColor: theme.colors.border },
+          ]}>
           <View style={styles.grabber}>
             <View style={[styles.grabberBar, { backgroundColor: theme.colors.border }]} />
           </View>
