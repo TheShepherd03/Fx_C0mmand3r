@@ -423,6 +423,11 @@ int OnInit()
    // Load EA settings from Firebase
    LoadEASettings();
 
+   // Restore per-position settings (break-even / trailing / time limit ...) saved
+   // before a restart, BEFORE EnsureAllPositionsTracked seeds untracked positions
+   // from the global defaults.
+   LoadPositionManagement();
+
    // Initialize Timer for regular loops (1 second resolution)
    EventSetTimer(1);
 
@@ -457,12 +462,14 @@ void OnTimer()
    // syncing, settings reloads and command polling until Monday's first tick.
    datetime now = TimeGMT();
 
+   // Position protection first, every second: independent of the chart symbol's
+   // ticks (the Bridge sits on one chart, e.g. USDJPY, which doesn't tick when that
+   // market is shut), of Firebase connectivity, and of the "no new trades" pause.
+   ManagePositions();
+
    // Ensure we hold a valid Firebase ID token before any network operation.
    if(!EnsureValidToken())
       return;
-
-   // Track any untracked open positions so global settings apply to all trades
-   EnsureAllPositionsTracked();
 
    // 1. Sync Data (Push to Firebase)
    if(now - g_lastSyncTime >= Inp_SyncInterval)
@@ -512,17 +519,9 @@ void OnTick()
    // Skip all operations if EA is paused
    if(g_EAPaused || g_EASchedulePaused)
       return;
-   
-   // Position Management (check every tick). Both functions act ONLY on positions
-   // that have the feature enabled per-position, so they run unconditionally: a
-   // position gets break-even/trailing only if the global toggle applied it at
-   // open OR the user enabled it for that position in the app. Otherwise it's off.
-   CheckBreakevenPositions();
-   CheckTrailingStops();
 
-   if(g_Settings.enableTimeManagement)
-      CheckTimeBasedManagement();
-   
+   // (Break-even / trailing / time management run from OnTimer -> ManagePositions.)
+
    // Check for external signals (every 5 seconds)
    if(Inp_EnableSignalReceiving)
    {
@@ -938,6 +937,13 @@ void PollCommands()
              ExecuteBreakevenCommand(response);
              MarkCommandExecuted();
          }
+         else if(StringFind(response, "\"action\":\"BREAKEVEN_NOW\"") > 0)
+         {
+             Print("Processing BREAKEVEN_NOW command");
+             string msg = "";
+             bool ok = ExecuteBreakevenNow(response, msg);
+             MarkCommandResult(ok, msg);   // the app shows this message to the user
+         }
          else if(StringFind(response, "\"action\":\"SET_TRAILING_STOP\"") > 0)
          {
              Print("Processing SET_TRAILING_STOP command");
@@ -1203,6 +1209,25 @@ void MarkCommandExecuted()
    string headers = "Content-Type: application/json\r\n";
 
    WebRequest("PATCH", url, headers, 2000, postData, resultData, resultHeaders);
+}
+
+//+------------------------------------------------------------------+
+//| Acknowledge with an outcome the app can show: status EXECUTED or  |
+//| FAILED plus a human-readable message (same short parent URL).     |
+//+------------------------------------------------------------------+
+void MarkCommandResult(bool ok, string message)
+{
+   StringReplace(message, "\\", "\\\\");
+   StringReplace(message, "\"", "\\\"");
+   string url = "https://" + Inp_ProjectID + "-default-rtdb.firebaseio.com/commands.json?auth=" + g_idToken;
+   string body = "{\"" + g_AccountID + "/latest/status\":\"" + (ok ? "EXECUTED" : "FAILED") + "\", \""
+                       + g_AccountID + "/latest/executedAt\":" + IntegerToString(TimeGMT()) + ", \""
+                       + g_AccountID + "/latest/message\":\"" + message + "\"}";
+   char postData[];
+   StringToCharArray(body, postData, 0, StringLen(body), CP_UTF8);
+   char resultData[];
+   string resultHeaders;
+   WebRequest("PATCH", url, "Content-Type: application/json\r\n", 2000, postData, resultData, resultHeaders);
 }
 
 //+------------------------------------------------------------------+
@@ -1586,14 +1611,203 @@ void CheckBreakevenPositions()
       // Check if threshold is reached
       if(reached)
       {
+         // Never loosen protection: if the stop is already at/beyond entry (trailing
+         // or a manual move), break-even is done — don't drag it back to entry.
+         double curSL = posInfo.StopLoss();
+         bool isBuy   = (posInfo.PositionType() == POSITION_TYPE_BUY);
+         if(curSL > 0 && ((isBuy && curSL >= openPrice) || (!isBuy && curSL <= openPrice)))
+         {
+            g_PosManagement[mgmtIndex].breakevenTriggered = true;
+            continue;
+         }
          // Move SL to break-even (entry price)
          if(trade.PositionModify(ticket, openPrice, posInfo.TakeProfit()))
          {
             Print("Break-even triggered for ticket ", ticket, ". SL moved to entry price: ", openPrice);
             g_PosManagement[mgmtIndex].breakevenTriggered = true;
          }
+         else
+         {
+            // Retried every second; log at most once a minute so a broker refusal is visible.
+            static datetime lastFailLog = 0;
+            if(TimeGMT() - lastFailLog >= 60)
+            {
+               lastFailLog = TimeGMT();
+               Print("Break-even for ticket ", ticket, " not applied yet: ", trade.ResultRetcodeDescription(),
+                     " (price ", DoubleToString(currentPrice, (int)SymbolInfoInteger(posInfo.Symbol(), SYMBOL_DIGITS)),
+                     ", entry ", openPrice, ")");
+            }
+         }
       }
    }
+}
+
+//+------------------------------------------------------------------+
+//| All per-position protection, run every second from OnTimer.       |
+//+------------------------------------------------------------------+
+void ManagePositions()
+{
+   EnsureAllPositionsTracked();   // new trades pick up the global defaults
+   CheckBreakevenPositions();
+   CheckTrailingStops();
+   if(g_Settings.enableTimeManagement)
+      CheckTimeBasedManagement();
+   SavePositionManagementIfChanged();
+}
+
+//+------------------------------------------------------------------+
+//| Persist per-position settings across EA/terminal restarts.        |
+//| Without this every restart silently reset each position's        |
+//| break-even / trailing / time limit to the global defaults.       |
+//+------------------------------------------------------------------+
+#define FXC_PM_FILE "fxc_posmgmt.csv"
+string g_pmSaved = "";
+
+string PositionManagementCsv()
+{
+   string s = "";
+   for(int i = 0; i < g_PosManagementCount; i++)
+   {
+      s += IntegerToString(g_PosManagement[i].ticket) + ";" +
+           IntegerToString((int)g_PosManagement[i].breakevenEnabled) + ";" +
+           IntegerToString(g_PosManagement[i].breakevenThreshold) + ";" +
+           IntegerToString((int)g_PosManagement[i].breakevenUsePercent) + ";" +
+           DoubleToString(g_PosManagement[i].breakevenPercent, 4) + ";" +
+           IntegerToString((int)g_PosManagement[i].breakevenTriggered) + ";" +
+           IntegerToString((int)g_PosManagement[i].trailingEnabled) + ";" +
+           IntegerToString(g_PosManagement[i].trailingPercentage) + ";" +
+           DoubleToString(g_PosManagement[i].lastTrailPrice, 8) + ";" +
+           IntegerToString((long)g_PosManagement[i].timeLimit) + ";" +
+           IntegerToString((int)g_PosManagement[i].weekendClose) + ";" +
+           DoubleToString(g_PosManagement[i].scaleInMultiplier, 4) + ";" +
+           IntegerToString(g_PosManagement[i].scaleInThreshold) + ";" +
+           IntegerToString((int)g_PosManagement[i].scaleInTriggered) + "\n";
+   }
+   return s;
+}
+
+void SavePositionManagementIfChanged()
+{
+   string s = PositionManagementCsv();
+   if(s == g_pmSaved) return;
+   int h = FileOpen(FXC_PM_FILE, FILE_WRITE|FILE_BIN);
+   if(h == INVALID_HANDLE) return;
+   uchar buf[];
+   int len = StringToCharArray(s, buf, 0, StringLen(s), CP_UTF8);
+   if(len > 0) FileWriteArray(h, buf, 0, len);
+   FileClose(h);
+   g_pmSaved = s;
+}
+
+void LoadPositionManagement()
+{
+   int h = FileOpen(FXC_PM_FILE, FILE_READ|FILE_BIN);
+   if(h == INVALID_HANDLE) return;
+   int sz = (int)FileSize(h);
+   uchar buf[];
+   if(sz > 0) { ArrayResize(buf, sz); FileReadArray(h, buf, 0, sz); }
+   FileClose(h);
+   if(sz <= 0) return;
+
+   string lines[];
+   int n = StringSplit(CharArrayToString(buf, 0, sz, CP_UTF8), '\n', lines);
+   int restored = 0;
+   for(int i = 0; i < n; i++)
+   {
+      string f[];
+      if(StringSplit(lines[i], ';', f) < 14) continue;
+      long ticket = StringToInteger(f[0]);
+      if(ticket <= 0 || !PositionSelectByTicket((ulong)ticket)) continue;   // closed meanwhile
+      if(FindPositionManagement(ticket) >= 0) continue;
+      int k = g_PosManagementCount;
+      ArrayResize(g_PosManagement, k + 1);
+      g_PosManagement[k].ticket              = ticket;
+      g_PosManagement[k].breakevenEnabled    = (StringToInteger(f[1]) != 0);
+      g_PosManagement[k].breakevenThreshold  = (int)StringToInteger(f[2]);
+      g_PosManagement[k].breakevenUsePercent = (StringToInteger(f[3]) != 0);
+      g_PosManagement[k].breakevenPercent    = StringToDouble(f[4]);
+      g_PosManagement[k].breakevenTriggered  = (StringToInteger(f[5]) != 0);
+      g_PosManagement[k].trailingEnabled     = (StringToInteger(f[6]) != 0);
+      g_PosManagement[k].trailingPercentage  = (int)StringToInteger(f[7]);
+      g_PosManagement[k].lastTrailPrice      = StringToDouble(f[8]);
+      g_PosManagement[k].timeLimit           = (datetime)StringToInteger(f[9]);
+      g_PosManagement[k].weekendClose        = (StringToInteger(f[10]) != 0);
+      g_PosManagement[k].scaleInMultiplier   = StringToDouble(f[11]);
+      g_PosManagement[k].scaleInThreshold    = (int)StringToInteger(f[12]);
+      g_PosManagement[k].scaleInTriggered    = (StringToInteger(f[13]) != 0);
+      g_PosManagementCount++;
+      restored++;
+   }
+   g_pmSaved = PositionManagementCsv();
+   Print("Position settings restored for ", restored, " open position(s) from ", FXC_PM_FILE);
+}
+
+//+------------------------------------------------------------------+
+//| Break-even NOW: move this position's SL to its entry immediately. |
+//| Returns false with a plain-English reason when it can't.          |
+//+------------------------------------------------------------------+
+bool ExecuteBreakevenNow(string response, string &msg)
+{
+   long ticket = 0;
+   int tp0 = StringFind(response, "\"ticket\":");
+   if(tp0 > 0)
+   {
+      string temp = StringSubstr(response, tp0 + 9);
+      int commaPos = StringFind(temp, ",");
+      int bracePos = StringFind(temp, "}");
+      int endPos = commaPos;
+      if(bracePos < commaPos || commaPos == -1) endPos = bracePos;
+      if(endPos > 0) ticket = StringToInteger(StringSubstr(temp, 0, endPos));
+   }
+   if(ticket <= 0 || !PositionSelectByTicket((ulong)ticket))
+   {
+      msg = "Position not found - it may already be closed.";
+      return false;
+   }
+
+   string sym   = PositionGetString(POSITION_SYMBOL);
+   bool   isBuy = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY);
+   double open  = PositionGetDouble(POSITION_PRICE_OPEN);
+   double sl    = PositionGetDouble(POSITION_SL);
+   double tp    = PositionGetDouble(POSITION_TP);
+   int    dg    = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
+   double point = SymbolInfoDouble(sym, SYMBOL_POINT);
+   double price = isBuy ? SymbolInfoDouble(sym, SYMBOL_BID) : SymbolInfoDouble(sym, SYMBOL_ASK);
+   long   lvl   = MathMax(SymbolInfoInteger(sym, SYMBOL_TRADE_STOPS_LEVEL), SymbolInfoInteger(sym, SYMBOL_TRADE_FREEZE_LEVEL));
+   double minDist = lvl * point;
+
+   int mi = FindPositionManagement(ticket);
+   if(mi < 0) { AddPositionManagement(ticket); mi = FindPositionManagement(ticket); }
+
+   if(sl > 0 && ((isBuy && sl >= open) || (!isBuy && sl <= open)))
+   {
+      if(mi >= 0) g_PosManagement[mi].breakevenTriggered = true;
+      msg = "Already protected: the stop loss is at or beyond your entry (" + DoubleToString(sl, dg) + ").";
+      return true;
+   }
+
+   double room = isBuy ? price - open : open - price;   // how far price has moved past entry
+   if(room <= 0)
+   {
+      msg = "The trade isn't in profit yet (price " + DoubleToString(price, dg) + ", entry " + DoubleToString(open, dg) +
+            "). A stop at entry is only possible once price is past your entry.";
+      return false;
+   }
+   if(room <= minDist)
+   {
+      msg = "Price is too close to entry: the broker needs at least " + DoubleToString(minDist / point, 0) +
+            " points between price and the stop. Try again once it has moved a bit further.";
+      return false;
+   }
+   if(!trade.PositionModify((ulong)ticket, NormalizeDouble(open, dg), tp))
+   {
+      msg = "The broker rejected the change: " + trade.ResultRetcodeDescription();
+      return false;
+   }
+   if(mi >= 0) g_PosManagement[mi].breakevenTriggered = true;
+   msg = "Stop loss moved to entry (" + DoubleToString(open, dg) + ").";
+   Print("Break-even NOW for ticket ", ticket, ": ", msg);
+   return true;
 }
 
 //+------------------------------------------------------------------+
@@ -2428,7 +2642,7 @@ void ExecuteModifySLTPCommand(string response)
          {
             // Update break-even status if SL was set to entry price
             double entryPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-            if(MathAbs(sl - entryPrice) < SymbolInfoDouble(_Symbol, SYMBOL_POINT) * 5) // Within 5 points of entry
+            if(MathAbs(sl - entryPrice) < SymbolInfoDouble(symbol, SYMBOL_POINT) * 5) // Within 5 points of entry
             {
                g_PosManagement[pmIndex].breakevenTriggered = true;
                Print("Break-even triggered for position ", ticket);
