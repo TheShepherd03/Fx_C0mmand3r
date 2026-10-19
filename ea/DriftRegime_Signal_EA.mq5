@@ -34,6 +34,7 @@ input double InpTPATR         = 6.0;     // indicative target = ATR * this
 int      hFast=INVALID_HANDLE, hSlow=INVALID_HANDLE, hATR=INVALID_HANDLE;
 datetime g_lastBar=0;
 int      g_pubDir=0;     // last published direction: 0 none, 1 long, -1 short
+bool     g_adopted=false; // first evaluated bar after a start: take the current regime as known
 
 int OnInit()
 {
@@ -62,6 +63,18 @@ void OnTick()
    int regime=0;
    if(f > s+band) regime=1;
    else if(f < s-band) regime=-1;           // else neutral -> keep current published signal
+
+   // After a (re)start the regime on the chart is not a flip: it was announced (or missed)
+   // before. Adopt it silently; announcing it again would look like a fresh signal (and
+   // be auto-traded). Only regime changes from here on are published.
+   if(!g_adopted)
+   {
+      g_adopted=true;
+      if(regime!=0) g_pubDir=regime;
+      Print("[DRIFTSIG] start: current regime ", (regime==1 ? "BUY" : (regime==-1 ? "SELL" : "neutral")),
+            " on ", _Symbol, " taken as known - only a flip from here on is published");
+      return;
+   }
 
    if(regime==0 || regime==g_pubDir) return;   // no flip
 

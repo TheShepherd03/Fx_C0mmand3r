@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
@@ -24,6 +24,7 @@ import { database } from '@/firebaseConfig';
 import { ref, set, onValue, off } from 'firebase/database';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { showAlert } from '@/components/AppDialog';
+import { AI_MAGIC, useAiLog } from '@/hooks/useAiTrade';
 
 interface AccountData {
   balance?: number;
@@ -36,6 +37,12 @@ interface AccountData {
 
 export default function PositionsScreen() {
   const { selectedAccount } = useAccount();
+  // The AI's reason for each trade it opened (aiLog), shown on its position card.
+  const aiLog = useAiLog(selectedAccount, 80);
+  const aiWhy = useMemo(
+    () => new Map(aiLog.filter((e) => e.op === 'open' && e.ticket > 0).map((e) => [e.ticket, e.reason] as [number, string])),
+    [aiLog],
+  );
   const { theme } = useTheme();
   const [data, setData] = useState<AccountData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -288,9 +295,11 @@ export default function PositionsScreen() {
     // hand or by trailing; armed ("BE 0.5%" / "BE 10p") while the auto rule waits.
     const slAtOrPastEntry = item.sl > 0 && (item.type === 0 ? item.sl >= item.openPrice : item.sl <= item.openPrice);
     const beApplied = !!item.breakevenTriggered || slAtOrPastEntry;
-    const beArmedLabel = item.breakevenUsePercent
-      ? `BE ${item.breakevenPercent ?? 0}%`
-      : `BE ${item.breakevenThreshold ?? 0}p`;
+    const beArmedLabel = (item.breakevenR ?? 0) > 0
+      ? `BE +${item.breakevenR}R`
+      : item.breakevenUsePercent
+        ? `BE ${item.breakevenPercent ?? 0}%`
+        : `BE ${item.breakevenThreshold ?? 0}p`;
     return (
     <TouchableOpacity
       style={[styles.positionCard, { backgroundColor: theme.colors.card }]}
@@ -331,6 +340,11 @@ export default function PositionsScreen() {
             {item.profit >= 0 ? '+' : ''}{formatCurrency(item.profit)}
           </Text>
           <View style={styles.badgesRow}>
+            {item.magic === AI_MAGIC && (
+              <View style={[styles.miniBadge, { backgroundColor: theme.colors.primary + '22' }]}>
+                <Text style={[styles.miniBadgeText, { color: theme.colors.primary }]}>AI</Text>
+              </View>
+            )}
             {(beApplied || item.breakevenEnabled) && (
               <View style={[styles.miniBadge, { backgroundColor: theme.colors.success + '22' }]}>
                 <Text style={[styles.miniBadgeText, { color: theme.colors.success }]}>
@@ -355,6 +369,12 @@ export default function PositionsScreen() {
           </View>
         </View>
       </View>
+
+      {item.magic === AI_MAGIC && !!aiWhy.get(item.ticket) && (
+        <Text style={[styles.aiWhy, { color: theme.colors.textSecondary }]} numberOfLines={3}>
+          AI: {aiWhy.get(item.ticket)}
+        </Text>
+      )}
 
       {/* Price Grid */}
       <View style={[styles.priceGrid, { borderTopColor: theme.colors.border, borderBottomColor: theme.colors.border }]}>
@@ -774,6 +794,12 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '800',
     marginBottom: 4,
+  },
+  aiWhy: {
+    fontSize: 12,
+    lineHeight: 17,
+    fontStyle: 'italic',
+    marginBottom: 10,
   },
   badgesRow: {
     flexDirection: 'row',

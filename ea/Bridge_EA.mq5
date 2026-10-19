@@ -84,7 +84,27 @@ string         g_authPassword = "";   // Resolved password (input or local file)
 #define FXC_NOAUTH_FILE "fxcommander_noauth.txt"
 bool           g_noAuth = false;
 
+// Auto trade (see the "Auto trade" section): the app's per-account settings, the
+// zone grade from prefs/signals, and the setups already handled (persisted).
+#define AT_MAX_AGE_SEC 120                         // a hand-off older than this is stale
+#define AT_DONE_FILE   "fxc_autotrade_done.txt"     // "key|action|sl|tp|utc" per handled setup
+struct AutoTradeSource { string key; bool on; long since; };
+AutoTradeSource g_atSrc[];
+double         g_atRiskPct   = 1.0;
+double         g_atCapPct    = 5.0;
+#define AT_DEFAULT_OPEN_RISK 50.0                  // the app's default open-risk limit
+double         g_atMaxOpenRiskPct = AT_DEFAULT_OPEN_RISK;   // no new auto trades above this open risk %
+datetime       g_atLoadedAt  = 0;    // 0 = settings not loaded yet since start (hand-offs wait)
+datetime       g_atLastLoad  = 0;
+string         g_atSummary   = "";   // last settings summary printed
+string         g_atPrefs     = "";   // raw prefs/signals
+datetime       g_atPrefsAt   = 0;
+string         g_atDone[];
+
 // Position Management Variables
+// Manual pause = Trade Control's Auto-Trading off: no new auto trades. Kept in this file
+// until the user resumes, so it survives restarts and midnight (it used to reset on both).
+#define FXC_PAUSE_FILE "fxc_paused.txt"
 bool           g_EAPaused = false;
 bool           g_EASchedulePaused = false;
 datetime       g_LastPauseCheck = 0;
@@ -149,7 +169,10 @@ void CloseAllPositions();
 void ClosePositionsByProfit(bool winners);
 void DeletePendingOrders();
 void MarkCommandExecuted();
-void ExecuteOpenPosition(string response);
+bool ExecuteOpenPosition(string response, string &msg);
+void LoadAutoTradeSettings();
+void LoadAutoTradeDone();
+void ProcessAutoTradeHandoffs();
 
 // Position Management Function Prototypes
 void LoadEASettings();
@@ -428,6 +451,21 @@ int OnInit()
    // from the global defaults.
    LoadPositionManagement();
 
+   // Setups already auto-traded (or skipped) before a restart are never traded again.
+   LoadAutoTradeDone();
+
+   // Non-USD account (ZAR): load the account-currency pairs (USDZAR, EURZAR, ...) that MT5
+   // values trades through - brokers keep them out of Market Watch, and while they aren't
+   // loaded the tick value is 0 (no risk in the app, no auto-trade sizing).
+   string accCcy = AccountInfoString(ACCOUNT_CURRENCY);
+   if(accCcy != "" && accCcy != "USD")
+      for(int si = 0; si < SymbolsTotal(false); si++)
+         if(StringFind(SymbolName(si, false), accCcy) >= 0) SymbolSelect(SymbolName(si, false), true);
+
+   // Still paused from before the restart? (Trade Control's Auto-Trading off)
+   g_EAPaused = FileIsExist(FXC_PAUSE_FILE);
+   if(g_EAPaused) Print("EA starts PAUSED: Auto-Trading is off in Trade Control - no new auto trades until resumed");
+
    // Initialize Timer for regular loops (1 second resolution)
    EventSetTimer(1);
 
@@ -492,6 +530,14 @@ void OnTimer()
       g_lastPollTime = now;
    }
 
+   // Auto trade: the app's settings every 10 s, the signal EAs' hand-offs every second.
+   if(now - g_atLastLoad >= 10)
+   {
+      LoadAutoTradeSettings();
+      g_atLastLoad = now;
+   }
+   ProcessAutoTradeHandoffs();
+
    // 3. Sync History (Push Snapshot)
    if(now - g_lastHistoryTime >= Inp_HistoryInterval * 60)
    {
@@ -512,10 +558,12 @@ void OnTimer()
 //+------------------------------------------------------------------+
 void OnTick()
 {
-   // Check EA Schedule and pause if necessary
+   // Check EA Schedule and pause if necessary (switched off = never schedule-paused)
    if(g_Settings.enableSchedule)
       CheckEASchedule();
-   
+   else
+      g_EASchedulePaused = false;
+
    // Skip all operations if EA is paused
    if(g_EAPaused || g_EASchedulePaused)
       return;
@@ -928,8 +976,9 @@ void PollCommands()
          else if(StringFind(response, "\"action\":\"OPEN_POSITION\"") > 0)
          {
              Print("Processing OPEN_POSITION command");
-             ExecuteOpenPosition(response);
-             MarkCommandExecuted();
+             string msg = "";
+             bool ok = ExecuteOpenPosition(response, msg);
+             MarkCommandResult(ok, msg);   // FAILED + the broker's reason instead of a blind EXECUTED
          }
          else if(StringFind(response, "\"action\":\"SET_BREAKEVEN\"") > 0)
          {
@@ -995,27 +1044,26 @@ void PollCommands()
 //+------------------------------------------------------------------+
 void SyncHistory()
 {
-   // Push { timestamp, equity, balance } to 'history/{accountId}'
-   // URL: .../history/{accountId}.json
-   
-   string url = "https://" + Inp_ProjectID + "-default-rtdb.firebaseio.com/history/" + g_AccountID + ".json?auth=" + g_idToken;
-   
+   // Add { timestamp, equity, balance } under 'history/{accountId}' via a root multi-path
+   // PATCH (key "t<utc>"; the app orders by the timestamp field): the old per-account
+   // POST URL is over MQL's ~1020-char WebRequest limit for long account ids (Swyft).
+   string url = "https://" + Inp_ProjectID + "-default-rtdb.firebaseio.com/.json?auth=" + g_idToken;
+
    CJSONObject *point = new CJSONObject();
    point.Add("timestamp", (int)TimeCurrent());
    point.Add("equity", accInfo.Equity());
    point.Add("balance", accInfo.Balance());
    
-   string jsonBody = point.ToString();
+   string jsonBody = "{\"history/" + g_AccountID + "/t" + IntegerToString((long)TimeGMT()) + "\":" + point.ToString() + "}";
    delete point;
-   
+
    char postData[];
    StringToCharArray(jsonBody, postData, 0, StringLen(jsonBody));
    char resultData[];
    string resultHeaders;
    string headers = "Content-Type: application/json\r\n";
-   
-   // POST appends to the list (creates a unique key for this snapshot)
-   int res = WebRequest("POST", url, headers, 2000, postData, resultData, resultHeaders);
+
+   int res = WebRequest("PATCH", url, headers, 2000, postData, resultData, resultHeaders);
    
    if(Inp_Verbose)
    {
@@ -1233,7 +1281,9 @@ void MarkCommandResult(bool ok, string message)
 //+------------------------------------------------------------------+
 //| Execute OPEN_POSITION Command                                    |
 //+------------------------------------------------------------------+
-void ExecuteOpenPosition(string response)
+// true = the order went through; msg = what happened, in plain words (written to the
+// command node as EXECUTED / FAILED + message).
+bool ExecuteOpenPosition(string response, string &msg)
 {
    Print("Parsing OPEN_POSITION command: ", response);
    
@@ -1339,8 +1389,9 @@ void ExecuteOpenPosition(string response)
    // Validate symbol
    if(symbol == "")
    {
+      msg = "The trade had no symbol.";
       Print("Invalid OPEN_POSITION: missing symbol");
-      return;
+      return false;
    }
 
    // --- Normalize volume to the symbol's constraints ---
@@ -1361,8 +1412,9 @@ void ExecuteOpenPosition(string response)
    lots = NormalizeDouble(lots, lotDigits);
    if(lots <= 0)
    {
+      msg = "Couldn't work out a valid lot size for " + symbol + ".";
       Print("Could not derive a valid lot size for ", symbol, " - skipping");
-      return;
+      return false;
    }
    
    // --- Current market prices & broker constraints ---
@@ -1380,7 +1432,7 @@ void ExecuteOpenPosition(string response)
    // 2 = BUY_STOP (above ask), 3 = SELL_STOP (below bid), 4 = BUY_LIMIT (below bid), 5 = SELL_LIMIT (above ask)
    if(orderType >= 2)
    {
-      if(price <= 0) { Print("Pending order needs a trigger price. Skipping ", symbol); return; }
+      if(price <= 0) { msg = "A pending order needs a trigger price."; Print("Pending order needs a trigger price. Skipping ", symbol); return false; }
       bool pIsBuy = (orderType == 2 || orderType == 4);
       double trig = price;
       // Keep the trigger a valid distance from current price for its kind
@@ -1402,21 +1454,31 @@ void ExecuteOpenPosition(string response)
       else if(orderType == 4) okPend = trade.BuyLimit(lots, trig, symbol, psl, ptp, ORDER_TIME_GTC, 0, "FX Commander");
       else if(orderType == 5) okPend = trade.SellLimit(lots, trig, symbol, psl, ptp, ORDER_TIME_GTC, 0, "FX Commander");
 
-      if(okPend) Print("Pending order placed: type=", orderType, " ", symbol, " @ ", trig, " SL=", psl, " TP=", ptp);
-      else       Print("Pending order failed. Retcode: ", trade.ResultRetcode(), " - ", trade.ResultRetcodeDescription());
-      return;
+      uint prc = trade.ResultRetcode();
+      okPend = okPend && (prc == TRADE_RETCODE_DONE || prc == TRADE_RETCODE_PLACED || prc == TRADE_RETCODE_DONE_PARTIAL);
+      if(okPend)
+      {
+         msg = (orderType <= 3 ? "Stop" : "Limit") + " order placed on " + symbol + " at " + DoubleToString(trig, digits) + ".";
+         Print("Pending order placed: type=", orderType, " ", symbol, " @ ", trig, " SL=", psl, " TP=", ptp);
+      }
+      else
+      {
+         msg = "The broker rejected the order: " + trade.ResultRetcodeDescription() + " (" + IntegerToString(prc) + ").";
+         Print("Pending order failed. Retcode: ", prc, " - ", trade.ResultRetcodeDescription());
+      }
+      return okPend;
    }
 
    // --- 1) Re-validate the signal: has price already hit its SL/TP? ---
    if(orderType == 0) // BUY, fills at ask
    {
-      if(sl > 0 && ask <= sl) { Print("Signal no longer valid (price at/below SL). Skipping ", symbol); return; }
-      if(tp > 0 && ask >= tp) { Print("Signal no longer valid (price at/above TP). Skipping ", symbol); return; }
+      if(sl > 0 && ask <= sl) { msg = "Price had already reached the stop loss."; Print("Signal no longer valid (price at/below SL). Skipping ", symbol); return false; }
+      if(tp > 0 && ask >= tp) { msg = "Price had already reached the take profit."; Print("Signal no longer valid (price at/above TP). Skipping ", symbol); return false; }
    }
    else // SELL, fills at bid
    {
-      if(sl > 0 && bid >= sl) { Print("Signal no longer valid (price at/above SL). Skipping ", symbol); return; }
-      if(tp > 0 && bid <= tp) { Print("Signal no longer valid (price at/below TP). Skipping ", symbol); return; }
+      if(sl > 0 && bid >= sl) { msg = "Price had already reached the stop loss."; Print("Signal no longer valid (price at/above SL). Skipping ", symbol); return false; }
+      if(tp > 0 && bid <= tp) { msg = "Price had already reached the take profit."; Print("Signal no longer valid (price at/below TP). Skipping ", symbol); return false; }
    }
 
    // --- 1.5) Re-anchor SL/TP to the actual fill so a MARKET order PRESERVES the
@@ -1464,10 +1526,14 @@ void ExecuteOpenPosition(string response)
                                 : trade.Sell(lots, symbol, 0, 0, 0, "FX Commander");
    }
 
-   if(!result)
+   uint rcode = trade.ResultRetcode();
+   if(!result || (rcode != TRADE_RETCODE_DONE && rcode != TRADE_RETCODE_DONE_PARTIAL && rcode != TRADE_RETCODE_PLACED))
    {
-      Print("Trade execution failed. Retcode: ", trade.ResultRetcode(), " - ", trade.ResultRetcodeDescription());
-      return;
+      msg = (rcode == TRADE_RETCODE_SERVER_DISABLES_AT)
+            ? "The broker has switched off EA (algo) trading on this account (" + IntegerToString(rcode) + ") - ask the broker to enable it."
+            : "The broker rejected the trade: " + trade.ResultRetcodeDescription() + " (" + IntegerToString(rcode) + ").";
+      Print("Trade execution failed. Retcode: ", rcode, " - ", trade.ResultRetcodeDescription());
+      return false;
    }
 
    // Resolve the actual position ticket from the deal (ResultOrder is 0 for market fills)
@@ -1479,6 +1545,8 @@ void ExecuteOpenPosition(string response)
       posTicket = (ulong)PositionGetInteger(POSITION_TICKET);
 
    Print("Trade executed successfully. Position ticket: ", posTicket);
+
+   msg = (orderType == 0 ? "Bought " : "Sold ") + DoubleToString(lots, lotDigits) + " " + symbol + ".";
 
    // If opened stopless, attach SL/TP now, re-clamped to the live price
    if(stoplessRetry && posTicket > 0 && (sl > 0 || tp > 0) && PositionSelectByTicket(posTicket))
@@ -1492,10 +1560,491 @@ void ExecuteOpenPosition(string response)
       if(trade.PositionModify(posTicket, sl2, tp2))
          Print("SL/TP attached after fill: SL=", sl2, " TP=", tp2);
       else
+      {
+         msg += " The broker refused the SL/TP - the trade is open WITHOUT them.";
          Print("Trade opened WITHOUT SL/TP (broker rejected attach): ", trade.ResultRetcodeDescription());
+      }
    }
 
    if(posTicket > 0) AddPositionManagement(posTicket);
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| Auto trade                                                        |
+//| The signal EAs in this terminal hand every NEW setup to the       |
+//| Bridge through a file in MQL5\Files (SignalLib_HandOff). If the   |
+//| user switched auto trade on for that source on this account in    |
+//| the app, the Bridge opens it at market, sized by risk:            |
+//|   lots = balance x riskPct% / (loss at the stop for 1 lot), down  |
+//|   to the broker's lot step. Below the broker's minimum lot, the   |
+//|   minimum lot is used only while it risks no more than capPct% of |
+//|   the balance; otherwise the setup is skipped (never rounded up). |
+//| Nothing new while the open trades already risk more than          |
+//| maxOpenRiskPct% of the balance - the app dashboard's TOTAL RISK   |
+//| (each position's entry->stop loss; positions without a stop loss  |
+//| don't count).                                                     |
+//| Never without its stop loss, never twice for the same setup (key  |
+//| + levels, persisted), only setups that appeared after the source  |
+//| was switched on, not while the EA is paused. Zone signals obey    |
+//| the app's zone grade setting (prefs/signals/zonesMinGrade).       |
+//|  autotrade/{acct}   {sources:{<sourceKey>:{on,since}},riskPct,    |
+//|                      capPct,maxOpenRiskPct}         (app writes)  |
+//|  autotradeLog/{acct}/{utc}_{key}   one row per attempt (Bridge)   |
+//| Pushes (source "Auto trades") when a trade opens or fails.        |
+//+------------------------------------------------------------------+
+
+// Firebase key form of a name (same rule as the app and SignalLib).
+string AtKey(string s)
+{
+   StringReplace(s, " ", "_"); StringReplace(s, ".", "_"); StringReplace(s, "$", "_");
+   StringReplace(s, "#", "_"); StringReplace(s, "[", "_"); StringReplace(s, "]", "_");
+   StringReplace(s, "/", "_");
+   return s;
+}
+
+string AtEsc(string s)
+{
+   StringReplace(s, "\\", "\\\\");
+   StringReplace(s, "\"", "\\\"");
+   return s;
+}
+
+// Number field of a flat JSON object (def when missing / null).
+double AtNum(string obj, string field, double def)
+{
+   string pat = "\"" + field + "\":";
+   int p = StringFind(obj, pat);
+   if(p < 0) return def;
+   p += StringLen(pat);
+   int len = StringLen(obj), e = p;
+   while(e < len)
+   {
+      ushort c = StringGetCharacter(obj, e);
+      if(c == ',' || c == '}' || c == ']') break;
+      e++;
+   }
+   string v = StringSubstr(obj, p, e - p);
+   StringTrimLeft(v); StringTrimRight(v);
+   if(v == "" || v == "null") return def;
+   return StringToDouble(v);
+}
+
+// String field of a flat JSON object ("" when missing).
+string AtStr(string obj, string field)
+{
+   string pat = "\"" + field + "\":\"";
+   int p = StringFind(obj, pat);
+   if(p < 0) return "";
+   p += StringLen(pat);
+   int e = StringFind(obj, "\"", p);
+   return (e < 0) ? "" : StringSubstr(obj, p, e - p);
+}
+
+// The object that is the value of "key" (first occurrence), or "".
+string AtObject(string json, string key)
+{
+   int p = StringFind(json, "\"" + key + "\":{");
+   return (p < 0) ? "" : ExtractAccountBlock(json, p);
+}
+
+// First-level  "name":{...}  children of a JSON object.
+int AtChildren(string obj, string &names[], string &vals[])
+{
+   ArrayResize(names, 0); ArrayResize(vals, 0);
+   int len = StringLen(obj), depth = 0, strStart = -1, valStart = -1;
+   bool inStr = false;
+   string lastName = "";
+   for(int i = 0; i < len; i++)
+   {
+      ushort c = StringGetCharacter(obj, i);
+      if(inStr)
+      {
+         if(c == '\\') { i++; continue; }
+         if(c == '"') { inStr = false; if(depth == 1) lastName = StringSubstr(obj, strStart, i - strStart); }
+         continue;
+      }
+      if(c == '"') { inStr = true; strStart = i + 1; }
+      else if(c == '{') { depth++; if(depth == 2) valStart = i; }
+      else if(c == '}')
+      {
+         if(depth == 2 && valStart >= 0)
+         {
+            int n = ArraySize(names);
+            ArrayResize(names, n + 1); ArrayResize(vals, n + 1);
+            names[n] = lastName;
+            vals[n]  = StringSubstr(obj, valStart, i - valStart + 1);
+            valStart = -1;
+         }
+         depth--;
+      }
+   }
+   return ArraySize(names);
+}
+
+int AtLotDigits(double step)
+{
+   return (step >= 1 ? 0 : (step >= 0.1 ? 1 : (step >= 0.01 ? 2 : 3)));
+}
+
+// The app's settings for this account (parent node: short URL), prefs/signals once a minute.
+void LoadAutoTradeSettings()
+{
+   string url = "https://" + Inp_ProjectID + "-default-rtdb.firebaseio.com/autotrade.json?auth=" + g_idToken;
+   char post[], res[]; string hdr;
+   if(WebRequest("GET", url, NULL, 3000, post, res, hdr) != 200) return;   // keep the last known settings
+   string body = CharArrayToString(res, 0, WHOLE_ARRAY, CP_UTF8);
+   int keyPos = StringFind(body, "\"" + g_AccountID + "\"");
+   string block = (keyPos >= 0) ? ExtractAccountBlock(body, keyPos) : "";
+
+   g_atRiskPct = AtNum(block, "riskPct", 1.0);
+   g_atCapPct  = AtNum(block, "capPct", 5.0);
+   g_atMaxOpenRiskPct = AtNum(block, "maxOpenRiskPct", AT_DEFAULT_OPEN_RISK);
+   if(g_atRiskPct <= 0) g_atRiskPct = 1.0;
+   if(g_atCapPct < 0)   g_atCapPct = 0;
+   if(g_atMaxOpenRiskPct <= 0) g_atMaxOpenRiskPct = AT_DEFAULT_OPEN_RISK;
+   string names[], vals[];
+   int n = AtChildren(AtObject(block, "sources"), names, vals);
+   ArrayResize(g_atSrc, n);
+   string on = "";
+   for(int i = 0; i < n; i++)
+   {
+      g_atSrc[i].key   = names[i];
+      g_atSrc[i].on    = (StringFind(vals[i], "\"on\":true") >= 0);
+      g_atSrc[i].since = (long)AtNum(vals[i], "since", 0);
+      if(g_atSrc[i].on) on += (on == "" ? "" : ", ") + names[i];
+   }
+   g_atLoadedAt = TimeGMT();
+
+   string summary = (on == "") ? "off for every source"
+                  : "ON for " + on + " - risk " + DoubleToString(g_atRiskPct, 1) +
+                    "%, minimum-lot cap " + DoubleToString(MathMax(g_atCapPct, g_atRiskPct), 1) +
+                    "%, nothing new while open trades risk over " + DoubleToString(g_atMaxOpenRiskPct, 1) + "%";
+   if(summary != g_atSummary) { Print("Auto trade: ", summary); g_atSummary = summary; }
+
+   if(g_atPrefsAt == 0 || TimeGMT() - g_atPrefsAt >= 60)
+   {
+      g_atPrefsAt = TimeGMT();
+      string purl = "https://" + Inp_ProjectID + "-default-rtdb.firebaseio.com/prefs/signals.json?auth=" + g_idToken;
+      char ppost[], pres[]; string phdr;
+      if(WebRequest("GET", purl, NULL, 3000, ppost, pres, phdr) == 200)
+      {
+         string s = CharArrayToString(pres, 0, WHOLE_ARRAY, CP_UTF8);
+         g_atPrefs = (s == "null") ? "" : s;
+      }
+   }
+}
+
+// Setups already handled ("key|action|sl|tp|utc"), kept across restarts.
+void LoadAutoTradeDone()
+{
+   ArrayResize(g_atDone, 0);
+   int h = FileOpen(AT_DONE_FILE, FILE_READ | FILE_TXT | FILE_ANSI | FILE_SHARE_READ | FILE_SHARE_WRITE);
+   if(h == INVALID_HANDLE) return;
+   while(!FileIsEnding(h))
+   {
+      string ln = FileReadString(h);
+      if(ln == "") continue;
+      int n = ArraySize(g_atDone);
+      ArrayResize(g_atDone, n + 1);
+      g_atDone[n] = ln;
+   }
+   FileClose(h);
+}
+
+bool AutoTradeDone(string id)
+{
+   for(int i = 0; i < ArraySize(g_atDone); i++)
+      if(StringFind(g_atDone[i], id + "|") == 0) return true;
+   return false;
+}
+
+void AutoTradeMarkDone(string id)
+{
+   int n = ArraySize(g_atDone);
+   if(n >= 300) { ArrayRemove(g_atDone, 0, n - 299); n = ArraySize(g_atDone); }
+   ArrayResize(g_atDone, n + 1);
+   g_atDone[n] = id + "|" + IntegerToString((long)TimeGMT());
+   int h = FileOpen(AT_DONE_FILE, FILE_WRITE | FILE_TXT | FILE_ANSI | FILE_SHARE_READ | FILE_SHARE_WRITE);
+   if(h == INVALID_HANDLE) return;
+   for(int i = 0; i < ArraySize(g_atDone); i++) FileWriteString(h, g_atDone[i] + "\n");
+   FileClose(h);
+}
+
+// Push only if the user hasn't turned "Auto trades" pushes off and it isn't quiet hours.
+bool AutoTradePushAllowed()
+{
+   if(g_atPrefs == "") return true;
+   string so = AtObject(AtObject(g_atPrefs, "sources"), "Auto_trades");
+   if(so != "" && StringFind(so, "\"notify\":false") >= 0) return false;
+   string q = AtObject(g_atPrefs, "quiet");
+   if(q != "" && StringFind(q, "\"enabled\":true") >= 0)
+   {
+      int st  = (int)AtNum(q, "start", 0);
+      int en  = (int)AtNum(q, "end", 0);
+      int off = (int)AtNum(q, "tzOffsetMin", 0);
+      long local = (long)TimeGMT() + (long)off * 60;
+      int mins = (int)(((local % 86400) + 86400) % 86400 / 60);
+      bool quiet = (st <= en) ? (mins >= st && mins < en) : (mins >= st || mins < en);   // wraps midnight
+      if(quiet) return false;
+   }
+   return true;
+}
+
+void AutoTradePush(string title, string body)
+{
+   if(!AutoTradePushAllowed()) return;
+   string url = "https://" + Inp_ProjectID + "-default-rtdb.firebaseio.com/pushTokens.json?auth=" + g_idToken;
+   char post[], res[]; string hdr;
+   if(WebRequest("GET", url, NULL, 3000, post, res, hdr) != 200) return;
+   string resp = CharArrayToString(res);
+   string sent = "|";
+   int pos = 0;
+   while(true)
+   {
+      int s = StringFind(resp, "ExponentPushToken[", pos);
+      if(s < 0) break;
+      int e = StringFind(resp, "]", s);
+      if(e < 0) break;
+      string token = StringSubstr(resp, s, e - s + 1);
+      pos = e + 1;
+      if(StringFind(sent, "|" + token + "|") >= 0) continue;   // same phone, several accounts
+      sent += token + "|";
+      string payload = "{\"to\":\"" + token + "\",\"title\":\"" + AtEsc(title) + "\",\"body\":\"" + AtEsc(body) +
+                       "\",\"sound\":\"default\",\"channelId\":\"signals\",\"priority\":\"high\"," +
+                       "\"data\":{\"screen\":\"positions\",\"account\":\"" + g_AccountID + "\"}}";
+      char p2[]; StringToCharArray(payload, p2, 0, StringLen(payload), CP_UTF8);
+      char r2[]; string h2;
+      WebRequest("POST", "https://exp.host/--/api/v2/push/send", "Content-Type: application/json\r\n", 5000, p2, r2, h2);
+   }
+}
+
+// One row per attempt for the app (autotradeLog/{acct}), plus the EA log.
+void AutoTradeLog(string result, string key, string source, string symbol, string action,
+                  double sl, double tp, double lots, double risk, double riskPct, ulong ticket, string reason)
+{
+   long now = (long)TimeGMT();
+   string cur = AccountInfoString(ACCOUNT_CURRENCY);
+   string row = "{\"at\":" + IntegerToString(now) + ",\"result\":\"" + result + "\"" +
+                ",\"source\":\"" + AtEsc(source) + "\",\"symbol\":\"" + AtEsc(symbol) + "\",\"action\":\"" + action + "\"" +
+                ",\"signalKey\":\"" + AtEsc(key) + "\",\"sl\":" + DoubleToString(sl, 8) + ",\"tp\":" + DoubleToString(tp, 8) +
+                ",\"lots\":" + DoubleToString(lots, 3) + ",\"risk\":" + DoubleToString(risk, 2) +
+                ",\"riskPct\":" + DoubleToString(riskPct, 2) + ",\"currency\":\"" + cur + "\"" +
+                ",\"ticket\":" + IntegerToString((long)ticket) + ",\"reason\":\"" + AtEsc(reason) + "\"}";
+   string body = "{\"autotradeLog/" + g_AccountID + "/" + IntegerToString(now) + "_" + key + "\":" + row + "}";
+   string url = "https://" + Inp_ProjectID + "-default-rtdb.firebaseio.com/.json?auth=" + g_idToken;
+   char post[]; StringToCharArray(body, post, 0, StringLen(body), CP_UTF8);
+   char res[]; string hdr;
+   int r = WebRequest("PATCH", url, "Content-Type: application/json\r\n", 3000, post, res, hdr);
+   Print("Auto trade ", result, ": ", source, " ", action, " ", symbol,
+         (lots > 0 ? " " + DoubleToString(lots, 3) + " lot, risk " + DoubleToString(risk, 2) + " " + cur +
+                     " (" + DoubleToString(riskPct, 1) + "%)" : ""),
+         (reason != "" ? " - " + reason : ""),
+         (r == 200 ? "" : "  [app log not written, HTTP " + IntegerToString(r) + "]"));
+}
+
+// What the open positions lose if every stop loss is hit - the app dashboard's TOTAL RISK
+// (to SL), same formula: |open - stop| / tick size x money per tick x lots, positions
+// without a stop loss left out.
+double AutoTradeOpenRisk()
+{
+   double risk = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      if(!posInfo.SelectByIndex(i)) continue;
+      double sl = posInfo.StopLoss();
+      double ts = SymbolInfoDouble(posInfo.Symbol(), SYMBOL_TRADE_TICK_SIZE);
+      if(sl <= 0 || ts <= 0) continue;
+      risk += MathAbs(posInfo.PriceOpen() - sl) / ts * FXC_MoneyPerTick(posInfo.Symbol()) * posInfo.Volume();
+   }
+   return risk;
+}
+
+// Size by risk and open at market with the signal's stop. 1 = opened, 0 = skipped, -1 = failed.
+int AutoTradeExecute(string symbol, string action, double entry, double sl, double tp,
+                     double &lots, double &risk, double &riskPct, ulong &ticket, string &reason)
+{
+   bool buy = (action == "BUY");
+   if(!buy && action != "SELL")    { reason = "unknown action " + action; return 0; }
+   if(!SymbolSelect(symbol, true)) { reason = symbol + " is not on this terminal"; return 0; }
+   if(sl <= 0)                     { reason = "the signal has no stop loss"; return 0; }
+   if(!TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) || !MQLInfoInteger(MQL_TRADE_ALLOWED))
+   { reason = "Algo Trading is switched off in MT5"; return -1; }
+   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+   if(balance <= 0) { reason = "the account balance is unavailable"; return 0; }
+
+   // the risk already running, as the dashboard shows it
+   double openPct = 100.0 * AutoTradeOpenRisk() / balance;
+   if(openPct > g_atMaxOpenRiskPct + 1e-9)
+   {
+      reason = "the open trades already risk " + DoubleToString(openPct, 1) + "% of the balance, above your " +
+               DoubleToString(g_atMaxOpenRiskPct, 1) + "% limit";
+      return 0;
+   }
+   ENUM_SYMBOL_TRADE_MODE mode = (ENUM_SYMBOL_TRADE_MODE)SymbolInfoInteger(symbol, SYMBOL_TRADE_MODE);
+   if(mode == SYMBOL_TRADE_MODE_DISABLED || mode == SYMBOL_TRADE_MODE_CLOSEONLY ||
+      (buy && mode == SYMBOL_TRADE_MODE_SHORTONLY) || (!buy && mode == SYMBOL_TRADE_MODE_LONGONLY))
+   { reason = "the broker isn't accepting new " + action + " orders on " + symbol; return 0; }
+
+   int    digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+   double point  = SymbolInfoDouble(symbol, SYMBOL_POINT);
+   double ask    = SymbolInfoDouble(symbol, SYMBOL_ASK);
+   double bid    = SymbolInfoDouble(symbol, SYMBOL_BID);
+   if(ask <= 0 || bid <= 0) { reason = "no price for " + symbol; return 0; }
+   double fill = buy ? ask : bid;
+
+   // still valid? price may have moved since the signal
+   if(buy ? fill <= sl : fill >= sl)             { reason = "price had already reached the stop"; return 0; }
+   if(tp > 0 && (buy ? fill >= tp : fill <= tp)) { reason = "price had already reached the target"; return 0; }
+
+   // keep the signal's stop/target DISTANCES from the actual fill (as the manual Execute does)
+   if(entry > 0) { double shift = fill - entry; sl += shift; if(tp > 0) tp += shift; }
+   // broker minimum distance: stops level, at least a few spreads on fast synthetics. MT5 checks
+   // a BUY's stop/target against the BID and a SELL's against the ASK (not the fill price).
+   double minDist = MathMax((double)SymbolInfoInteger(symbol, SYMBOL_TRADE_STOPS_LEVEL) * point, (ask - bid) * 3.0) + 10 * point;
+   if(buy) { if(sl > bid - minDist) sl = bid - minDist; if(tp > 0 && tp < bid + minDist) tp = bid + minDist; }
+   else    { if(sl < ask + minDist) sl = ask + minDist; if(tp > 0 && tp > ask - minDist) tp = ask - minDist; }
+   sl = NormalizeDouble(sl, digits);
+   if(tp > 0) tp = NormalizeDouble(tp, digits);
+
+   // size by risk: money lost at the stop for 1 lot, in the account currency
+   ENUM_ORDER_TYPE type = buy ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+   double loss = 0;
+   if(!OrderCalcProfit(type, symbol, 1.0, fill, sl, loss) || loss >= 0)
+   { reason = "couldn't value the stop for " + symbol; return 0; }
+   double perLot  = -loss;
+   double vMin  = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
+   double vMax  = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
+   double vStep = SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP);
+   if(vStep <= 0) vStep = (vMin > 0 ? vMin : 0.01);
+   int ld = AtLotDigits(vStep);
+   lots = MathFloor(balance * g_atRiskPct / 100.0 / perLot / vStep + 1e-9) * vStep;
+   if(lots < vMin - 1e-9)
+   {
+      double cap    = MathMax(g_atCapPct, g_atRiskPct);
+      double minPct = 100.0 * perLot * vMin / balance;
+      if(minPct > cap + 1e-9)
+      {
+         reason = "the minimum lot (" + DoubleToString(vMin, ld) + ") would risk " + DoubleToString(minPct, 1) +
+                  "% of the balance, above your " + DoubleToString(cap, 1) + "% cap";
+         lots = 0;
+         return 0;
+      }
+      lots = vMin;
+   }
+   if(vMax > 0 && lots > vMax) lots = vMax;
+   lots    = NormalizeDouble(lots, ld);
+   risk    = perLot * lots;
+   riskPct = 100.0 * risk / balance;
+
+   double margin = 0;
+   if(OrderCalcMargin(type, symbol, lots, fill, margin) && margin > AccountInfoDouble(ACCOUNT_MARGIN_FREE))
+   {
+      reason = "not enough free margin (needs " + DoubleToString(margin, 2) + " " + AccountInfoString(ACCOUNT_CURRENCY) + ")";
+      return 0;
+   }
+
+   // at market WITH the stop; no stopless retry if the broker rejects it (the size depends on the stop)
+   bool sent = buy ? trade.Buy(lots, symbol, 0, sl, tp, "FX Commander Auto")
+                   : trade.Sell(lots, symbol, 0, sl, tp, "FX Commander Auto");
+   uint rc = trade.ResultRetcode();
+   if(!sent || (rc != TRADE_RETCODE_DONE && rc != TRADE_RETCODE_DONE_PARTIAL && rc != TRADE_RETCODE_PLACED))
+   {
+      reason = "the broker rejected it: " + trade.ResultRetcodeDescription() + " (" + IntegerToString(rc) + ")";
+      return -1;
+   }
+   ulong deal = trade.ResultDeal();
+   if(deal > 0 && HistoryDealSelect(deal)) ticket = (ulong)HistoryDealGetInteger(deal, DEAL_POSITION_ID);
+   if(ticket == 0) ticket = trade.ResultOrder();
+   double px = trade.ResultPrice();                     // risk from the real fill
+   if(px > 0 && OrderCalcProfit(type, symbol, lots, px, sl, loss) && loss < 0)
+   {
+      risk    = -loss;
+      riskPct = 100.0 * risk / balance;
+   }
+   if(ticket > 0) AddPositionManagement((long)ticket);
+   return 1;
+}
+
+// One hand-off file from a signal EA.
+void HandleAutoTradeFile(string name)
+{
+   int f = FileOpen(name, FILE_READ | FILE_TXT | FILE_ANSI | FILE_SHARE_READ | FILE_SHARE_WRITE);
+   if(f == INVALID_HANDLE) return;                       // locked right now: next second
+   string line = FileReadString(f);
+   FileClose(f);
+   string p[];
+   if(StringSplit(line, '|', p) < 10 || p[0] != "v1") { FileDelete(name); return; }
+   long utc = StringToInteger(p[9]);
+   long age = (long)TimeGMT() - utc;
+   if(g_atLoadedAt == 0)                                  // settings not loaded yet: wait, unless stale
+   {
+      if(age > AT_MAX_AGE_SEC) FileDelete(name);
+      return;
+   }
+   FileDelete(name);
+
+   string key = p[1], source = p[2], symbol = p[3], action = p[4], grade = p[8];
+   double entry = StringToDouble(p[5]), sl = StringToDouble(p[6]), tp = StringToDouble(p[7]);
+
+   // auto trade on for this source, and the setup appeared after it was switched on?
+   string sk = AtKey(source);
+   int si = -1;
+   for(int i = 0; i < ArraySize(g_atSrc); i++) if(g_atSrc[i].key == sk) { si = i; break; }
+   if(si < 0 || !g_atSrc[si].on || utc < g_atSrc[si].since) return;
+
+   // zone signals: only the grades chosen in the app ("C" > "B" > "A" = below the setting)
+   if(grade != "" && StringFind(source, "Zones") == 0)
+   {
+      string minG = AtStr(g_atPrefs, "zonesMinGrade");
+      if(minG == "") minG = "C";
+      if(StringCompare(grade, minG) > 0) return;
+   }
+
+   string id = key + "|" + action + "|" + p[6] + "|" + p[7];
+   if(AutoTradeDone(id)) return;                          // this setup was handled already
+   AutoTradeMarkDone(id);
+
+   double lots = 0, risk = 0, riskPct = 0;
+   ulong ticket = 0;
+   string reason = "";
+   int result = 0;
+   if(age > AT_MAX_AGE_SEC)
+      reason = "the signal was " + IntegerToString(age) + " s old when the Bridge saw it";
+   else if(g_EAPaused)
+      reason = "the EA is paused (Auto-Trading is off in Trade Control)";
+   else if(g_EASchedulePaused)
+      reason = "the EA's daily pause window (" + g_Settings.pauseStartTime + "-" + g_Settings.pauseEndTime + " server time)";
+   else
+      result = AutoTradeExecute(symbol, action, entry, sl, tp, lots, risk, riskPct, ticket, reason);
+
+   AutoTradeLog(result > 0 ? "opened" : (result == 0 ? "skipped" : "failed"),
+                key, source, symbol, action, sl, tp, lots, risk, riskPct, ticket, reason);
+   string cur = AccountInfoString(ACCOUNT_CURRENCY);
+   if(result > 0)
+      AutoTradePush("Auto trade: " + action + " " + symbol,
+                    source + " - " + DoubleToString(lots, AtLotDigits(SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP))) +
+                    " lot, risk " + DoubleToString(risk, 2) + " " + cur + " (" + DoubleToString(riskPct, 1) + "%)");
+   else if(result < 0)
+      AutoTradePush("Auto trade failed: " + action + " " + symbol, source + " - " + reason);
+}
+
+// The signal EAs' hand-offs (fxc_at_*.txt in MQL5\Files), every second.
+void ProcessAutoTradeHandoffs()
+{
+   string name;
+   long h = FileFindFirst("fxc_at_*.txt", name);
+   if(h == INVALID_HANDLE) return;
+   string names[];
+   do
+   {
+      int n = ArraySize(names);
+      ArrayResize(names, n + 1);
+      names[n] = name;
+   }
+   while(FileFindNext(h, name));
+   FileFindClose(h);
+   for(int i = 0; i < ArraySize(names); i++) HandleAutoTradeFile(names[i]);
 }
 
 //+------------------------------------------------------------------+
@@ -2011,7 +2560,7 @@ void InitializeDailyTracking()
    {
       g_DayStart = currentDayStart;
       g_DailyStartEquity = accInfo.Equity();
-      g_EAPaused = false; // Reset pause state for new day
+      // The manual pause is NOT reset here: it stays until the user resumes (FXC_PAUSE_FILE).
       Print("Daily tracking initialized. Start equity: ", g_DailyStartEquity);
    }
 }
@@ -2416,8 +2965,10 @@ void ExecuteEAPauseCommand(string response)
    
    if(immediate)
    {
-      Print("Manual EA pause activated for ", pauseDuration, " seconds. Mode: ", pauseMode);
+      Print("Manual EA pause activated (until resumed). Mode: ", pauseMode);
       g_EAPaused = true;
+      int pf = FileOpen(FXC_PAUSE_FILE, FILE_WRITE | FILE_TXT | FILE_ANSI);
+      if(pf != INVALID_HANDLE) { FileWriteString(pf, IntegerToString((long)TimeGMT()) + "\n"); FileClose(pf); }
       
       // Handle different pause modes
       if(pauseMode == 1) // Close All
@@ -2425,15 +2976,13 @@ void ExecuteEAPauseCommand(string response)
          CloseAllPositions();
       }
       
-      // Set a timer to automatically resume (simplified implementation)
-      // In a more sophisticated implementation, you would use a timer or save the resume time
-      Print("EA will resume automatically after ", pauseDuration, " seconds");
    }
    else
    {
       // Resume EA
       g_EAPaused = false;
       g_EASchedulePaused = false;
+      FileDelete(FXC_PAUSE_FILE);
       Print("EA resumed from manual pause");
    }
 }
@@ -2454,7 +3003,9 @@ void InitializeDefaultSettings()
    g_Settings.weekendClose = true;
    g_Settings.dailyTargetPercent = 5.0;
    
-   g_Settings.enableSchedule = true;
+   // The daily pause window is OFF unless settings/{account}/enableSchedule is true. It used
+   // to default ON (13:00-14:00 server time) with no switch anywhere in the app.
+   g_Settings.enableSchedule = false;
    g_Settings.pauseStartTime = "13:00";
    g_Settings.pauseEndTime = "14:00";
    g_Settings.pauseMode = 0;
@@ -2499,6 +3050,12 @@ void LoadEASettings()
             g_Settings.enableTrailing = true;
          else if(StringFind(response, "\"enableTrailing\":false") > 0)
             g_Settings.enableTrailing = false;
+
+         // Daily pause window (pauseStartTime-pauseEndTime, server time): off unless set true here
+         if(StringFind(response, "\"enableSchedule\":true") > 0)
+            g_Settings.enableSchedule = true;
+         else if(StringFind(response, "\"enableSchedule\":false") > 0)
+            g_Settings.enableSchedule = false;
             
          // Parse numeric values
          int breakevenPos = StringFind(response, "\"breakevenThresholdPips\":");

@@ -16,8 +16,10 @@ import { onValue, ref } from 'firebase/database';
 import { database } from '@/firebaseConfig';
 import { AccountSelector } from '@/components/AccountSelector';
 import { IconSymbol } from '@/components/ui/icon-symbol';
+import { formatMoney } from '@/utils/currency';
 import { useAccount } from '@/contexts/AccountContext';
 import { useTheme, type Theme } from '@/contexts/ThemeContext';
+import { EMA_KEYS, EMA_LABEL, GRADES, touchLabel, trendLabel, type EmaState } from '@/constants/types';
 
 // One closed signal, written by the signal EAs when it hits TP/SL or expires:
 // signalLog/{accountId}/{openedMinute_Source_Symbol}. Keys are NOT ordered by close
@@ -27,10 +29,15 @@ interface Outcome {
   source: string;
   symbol: string;
   action: string;   // 'BUY' | 'SELL'
-  tag: string;      // '' when the EA sent none (Zones: sweep / engulf / reject)
+  tag: string;      // '' when the EA sent none (Zones: choch / bos / engulf / sweep; reject before 2026-10-05)
   outcome: string;  // 'tp' | 'sl' | 'expired'
   r: number;        // R-multiple: TP ≈ +reward/risk, SL = -1, expired = mark-to-market
   closedAt: number; // UTC epoch secs
+  // Zones only, from 30 Sep 2026 on ('' / 0 on older records and other sources)
+  grade: string;    // 'A' | 'B' | 'C'
+  trend: string;    // 'with' | 'against' | 'flat' (vs the H1 trend)
+  touch: number;    // 1 = first visit to the zone
+  ema: EmaState | null; // the entry vs the M3 EMA ribbon when it fired (every source, from 2026-10-08)
 }
 
 type Range = '7D' | '30D' | 'All';
@@ -78,6 +85,10 @@ function parseLog(val: any): Outcome[] {
       outcome: typeof e.outcome === 'string' ? e.outcome.toLowerCase() : '',
       r,
       closedAt,
+      grade: typeof e.grade === 'string' ? e.grade.trim().toUpperCase() : '',
+      trend: typeof e.trend === 'string' ? e.trend.trim().toLowerCase() : '',
+      touch: Number.isFinite(num(e.touch)) ? num(e.touch) : 0,
+      ema: e.ema && typeof e.ema === 'object' ? (e.ema as EmaState) : null,
     });
   });
   return out.sort((a, b) => a.closedAt - b.closedAt);
@@ -114,6 +125,28 @@ function groupBy(list: Outcome[], keyOf: (o: Outcome) => string): Group[] {
     (a, b) => b.stats.totalR - a.stats.totalR || b.stats.n - a.stats.n,
   );
 }
+
+/** Rows in a fixed order (A, B, C / 1st, 2nd, 3rd+); outcomes whose key is '' are left out. */
+function groupInOrder(list: Outcome[], keyOf: (o: Outcome) => string, order: readonly string[]): Group[] {
+  return groupBy(list.filter((o) => keyOf(o) !== ''), keyOf).sort(
+    (a, b) => order.indexOf(a.name) - order.indexOf(b.name),
+  );
+}
+
+/** One row per EMA and position ("EMA 200 · above", ...), each outcome counted once per EMA. */
+function groupByEma(list: Outcome[]): Group[] {
+  const rows: Group[] = [];
+  [...EMA_KEYS].reverse().forEach((k) =>
+    (['above', 'inside', 'below'] as const).forEach((pos) => {
+      const items = list.filter((o) => o.ema?.[k] === pos);
+      if (items.length) rows.push({ name: `${EMA_LABEL[k]} · ${pos}`, list: items, stats: computeStats(items) });
+    }),
+  );
+  return rows;
+}
+
+const TOUCH_ORDER = [1, 2, 3].map(touchLabel);
+const TREND_ORDER = ['with', 'against', 'flat'].map(trendLabel);
 
 const fmtR = (r: number, digits = 2) =>
   `${r > 0 ? '+' : r < 0 ? '-' : ''}${Math.abs(r).toFixed(digits)}R`;
@@ -298,6 +331,7 @@ function OutcomeRow({
         <Text style={[styles.outMeta, { color: theme.colors.textTertiary }]} numberOfLines={1}>
           <Text style={{ color: actionColor, fontWeight: '800' }}>{o.action || '—'}</Text>
           {o.tag ? ` · ${o.tag}` : ''}
+          {o.grade ? ` · grade ${o.grade}` : ''}
         </Text>
       </View>
       <View style={[styles.outBadge, { backgroundColor: badge.color + '22' }]}>
@@ -329,11 +363,41 @@ function SourceDetail({
     [group.list, hasTags],
   );
   const recent = useMemo(() => group.list.slice(-RECENT_LIMIT).reverse(), [group.list]);
+  // Zones: grade / zone freshness / H1 trend, so the grading can be checked against results.
+  const byGrade = useMemo(() => groupInOrder(group.list, (o) => o.grade, GRADES), [group.list]);
+  const byTouch = useMemo(
+    () => groupInOrder(group.list, (o) => (o.touch > 0 ? touchLabel(o.touch) : ''), TOUCH_ORDER),
+    [group.list],
+  );
+  const byTrend = useMemo(
+    () => groupInOrder(group.list, (o) => (o.trend ? trendLabel(o.trend) : ''), TREND_ORDER),
+    [group.list],
+  );
+  const graded = group.list.filter((o) => o.grade).length;
+  const byEma = useMemo(() => groupByEma(group.list), [group.list]);
+  const withEma = group.list.filter((o) => o.ema).length;
 
   return (
     <Animated.View entering={FadeIn.duration(180)} style={[styles.detail, { borderTopColor: theme.colors.border }]}>
       <BreakdownTable title="By symbol" rows={bySymbol} theme={theme} rColor={rColor} />
       {hasTags && <BreakdownTable title="By setup tag" rows={byTag} theme={theme} rColor={rColor} />}
+      {byGrade.length > 0 && <BreakdownTable title="By grade" rows={byGrade} theme={theme} rColor={rColor} />}
+      {byTouch.length > 0 && <BreakdownTable title="By zone touch" rows={byTouch} theme={theme} rColor={rColor} />}
+      {byTrend.length > 0 && <BreakdownTable title="By H1 trend" rows={byTrend} theme={theme} rColor={rColor} />}
+      {byEma.length > 0 && (
+        <BreakdownTable title="By M3 EMAs (at signal)" rows={byEma} theme={theme} rColor={rColor} />
+      )}
+      {withEma > 0 && withEma < group.list.length && (
+        <Text style={[styles.footnote, { color: theme.colors.textTertiary }]}>
+          M3 EMA position covers {withEma} of {group.list.length} outcomes — signals from before 8 Oct have none.
+        </Text>
+      )}
+      {graded > 0 && graded < group.list.length && (
+        <Text style={[styles.footnote, { color: theme.colors.textTertiary }]}>
+          Grade, touch and trend cover {graded} of {group.list.length} outcomes — signals from before 30 Sep
+          have none.
+        </Text>
+      )}
       <Text style={[styles.detailTitle, { color: theme.colors.textSecondary }]}>
         Last {recent.length} {recent.length === 1 ? 'outcome' : 'outcomes'}
       </Text>
@@ -411,6 +475,367 @@ function SourceCard({
   );
 }
 
+/* ------------------------------ real trades ------------------------------- */
+
+// One closed MT5 trade as the Bridge syncs it (last 30 days): tradeHistory/{account}/{positionId}.
+// magic / comment come from the opening deal (Bridge builds from 2026-10-07 on; null = not sent).
+interface ClosedTrade {
+  id: string;
+  ticket: number;
+  symbol: string;
+  type: number; // 0 buy, 1 sell
+  lots: number;
+  profit: number; // account currency, incl. swap + commission
+  closeTime: number;
+  magic: number | null;
+  comment: string;
+}
+
+type TradeKind = 'auto' | 'ea' | 'app' | 'manual' | 'unknown';
+
+interface TradeGroup {
+  key: string;
+  name: string;
+  sub: string;
+  kind: TradeKind;
+  list: ClosedTrade[]; // oldest -> newest
+  n: number;
+  wins: number;
+  net: number;
+  grossWin: number;
+  grossLoss: number;
+}
+
+function parseTrades(val: any): ClosedTrade[] {
+  if (!val || typeof val !== 'object') return [];
+  const out: ClosedTrade[] = [];
+  Object.keys(val).forEach((id) => {
+    const t = val[id];
+    if (!t || typeof t !== 'object') return;
+    const profit = num(t.profit);
+    const closeTime = num(t.closeTime);
+    if (!Number.isFinite(profit) || !Number.isFinite(closeTime) || closeTime <= 0) return;
+    const magic = num(t.magic);
+    out.push({
+      id,
+      ticket: Number.isFinite(num(t.ticket)) ? num(t.ticket) : Number(id) || 0,
+      symbol: typeof t.symbol === 'string' && t.symbol ? t.symbol : '—',
+      type: num(t.type) === 1 ? 1 : 0,
+      lots: Number.isFinite(num(t.lots)) ? num(t.lots) : 0,
+      profit,
+      closeTime,
+      magic: Number.isFinite(magic) ? magic : null,
+      comment: typeof t.comment === 'string' ? t.comment : '',
+    });
+  });
+  return out.sort((a, b) => a.closeTime - b.closeTime);
+}
+
+// Brokers append "[sl 1.2345]" / "[tp ...]" to comments; drop those.
+const cleanComment = (c: string) => c.replace(/\[[^\]]*\]/g, '').trim();
+
+/**
+ * Who opened each trade: the Bridge's auto trades by signal source (autotradeLog ticket ->
+ * source), the app's Execute ("FX Commander"), each EA by its magic number (named by its
+ * most common comment), magic 0 = by hand. Groups sorted by net P/L, best first.
+ */
+function groupTrades(list: ClosedTrade[], autoSource: Map<number, string>): TradeGroup[] {
+  const map = new Map<string, TradeGroup>();
+  const add = (key: string, kind: TradeKind, name: string, sub: string, t: ClosedTrade) => {
+    let g = map.get(key);
+    if (!g) {
+      g = { key, name, sub, kind, list: [], n: 0, wins: 0, net: 0, grossWin: 0, grossLoss: 0 };
+      map.set(key, g);
+    }
+    g.list.push(t);
+    g.n++;
+    g.net += t.profit;
+    if (t.profit > 0) {
+      g.wins++;
+      g.grossWin += t.profit;
+    } else if (t.profit < 0) {
+      g.grossLoss -= t.profit;
+    }
+  };
+  list.forEach((t) => {
+    const src = autoSource.get(t.ticket);
+    const c = cleanComment(t.comment);
+    if (src) add(`auto:${src}`, 'auto', `Auto · ${src}`, 'opened by the Bridge from a signal', t);
+    else if (t.magic === 20261009 || c.startsWith('FX Commander AI')) add('auto:AI', 'auto', 'Auto · AI', 'opened by the AI routine', t);
+    else if (c.startsWith('FX Commander Auto')) add('auto:?', 'auto', 'Auto trade', 'opened by the Bridge (source not logged)', t);
+    else if (c.startsWith('FX Commander')) add('app', 'app', 'From the app', 'Execute on a signal / order screen', t);
+    else if (t.magic === null) add('unknown', 'unknown', 'Not tagged', 'closed before the Bridge recorded which EA', t);
+    else if (t.magic === 0) add('manual', 'manual', 'Manual', 'magic 0 - by hand, or an EA without a magic number', t);
+    else add(`ea:${t.magic}`, 'ea', '', `magic ${t.magic}`, t);
+  });
+  // An EA is named by the comment it uses most (else its magic number).
+  map.forEach((g) => {
+    if (g.kind !== 'ea') return;
+    const counts = new Map<string, number>();
+    g.list.forEach((t) => {
+      const c = cleanComment(t.comment);
+      if (c) counts.set(c, (counts.get(c) ?? 0) + 1);
+    });
+    let best = '';
+    let bestN = 0;
+    counts.forEach((n, c) => {
+      if (n > bestN) {
+        best = c;
+        bestN = n;
+      }
+    });
+    g.name = best || `EA #${g.key.slice(3)}`;
+  });
+  return Array.from(map.values()).sort((a, b) => b.net - a.net || b.n - a.n);
+}
+
+const tradePF = (g: { grossWin: number; grossLoss: number }) =>
+  g.grossLoss > 0 ? (g.grossWin / g.grossLoss).toFixed(2) : g.grossWin > 0 ? '∞' : '—';
+
+function TradeGroupCard({
+  group,
+  currency,
+  expanded,
+  onToggle,
+  now,
+  theme,
+}: {
+  group: TradeGroup;
+  currency: string;
+  expanded: boolean;
+  onToggle: () => void;
+  now: number;
+  theme: Theme;
+}) {
+  const money = (v: number) => `${v > 0 ? '+' : v < 0 ? '-' : ''}${formatMoney(Math.abs(v), currency)}`;
+  const pColor = (v: number) => (v > 0 ? theme.colors.profit : v < 0 ? theme.colors.loss : theme.colors.textSecondary);
+  const cumulative = useMemo(() => {
+    let c = 0;
+    return group.list.map((t) => (c += t.profit));
+  }, [group.list]);
+  const bySymbol = useMemo(() => {
+    const m = new Map<string, { n: number; wins: number; net: number }>();
+    group.list.forEach((t) => {
+      const s = m.get(t.symbol) ?? { n: 0, wins: 0, net: 0 };
+      s.n++;
+      if (t.profit > 0) s.wins++;
+      s.net += t.profit;
+      m.set(t.symbol, s);
+    });
+    return Array.from(m, ([symbol, s]) => ({ symbol, ...s })).sort((a, b) => b.net - a.net);
+  }, [group.list]);
+  const recent = useMemo(() => group.list.slice(-10).reverse(), [group.list]);
+  const head = [styles.th, { color: theme.colors.textTertiary }];
+
+  return (
+    <View style={[styles.card, { backgroundColor: theme.colors.card }]}>
+      <Pressable
+        onPress={onToggle}
+        accessibilityRole="button"
+        accessibilityState={{ expanded }}
+        accessibilityLabel={`${group.name}: ${group.n} trades, net ${money(group.net)}`}
+        style={({ pressed }) => pressed && { opacity: 0.85 }}>
+        <View style={styles.cardTop}>
+          <View style={[styles.badge, { backgroundColor: sourceColor(group.name) }]}>
+            <Text style={styles.badgeText}>{initials(group.name.replace(/^Auto · /, ''))}</Text>
+          </View>
+          <View style={styles.cardTitleCol}>
+            <Text style={[styles.sourceName, { color: theme.colors.text }]} numberOfLines={1}>
+              {group.name}
+            </Text>
+            <View style={styles.metaRow}>
+              <Text style={[styles.meta, { color: theme.colors.textSecondary }]} numberOfLines={1}>
+                {group.n} {group.n === 1 ? 'trade' : 'trades'} · {group.sub}
+              </Text>
+            </View>
+          </View>
+          <Sparkline
+            values={cumulative}
+            width={96}
+            height={36}
+            color={group.net >= 0 ? theme.colors.profit : theme.colors.loss}
+            baseline={theme.colors.border}
+          />
+        </View>
+
+        <View style={[styles.statsRow, { borderTopColor: theme.colors.border }]}>
+          <Stat label="WIN RATE" value={fmtPct(group.n ? group.wins / group.n : 0)} theme={theme} />
+          <Stat label="PF" value={tradePF(group)} theme={theme} />
+          <Stat label="AVG" value={money(group.n ? group.net / group.n : 0)} color={pColor(group.net)} theme={theme} />
+          <Stat label="NET P/L" value={money(group.net)} color={pColor(group.net)} theme={theme} />
+          <IconSymbol name={expanded ? 'chevron.up' : 'chevron.down'} size={22} color={theme.colors.textTertiary} />
+        </View>
+      </Pressable>
+
+      {expanded && (
+        <Animated.View entering={FadeIn.duration(180)} style={[styles.detail, { borderTopColor: theme.colors.border }]}>
+          <View style={styles.table}>
+            <Text style={[styles.detailTitle, { color: theme.colors.textSecondary }]}>By symbol</Text>
+            <View style={styles.tr}>
+              <Text style={[...head, styles.cName]}> </Text>
+              <Text style={[...head, styles.cN]}>N</Text>
+              <Text style={[...head, styles.cWin]}>WIN</Text>
+              <Text style={[...head, styles.cMoney]}>NET</Text>
+            </View>
+            {bySymbol.map((s) => (
+              <View key={s.symbol} style={[styles.tr, styles.trBody, { borderTopColor: theme.colors.border }]}>
+                <Text style={[styles.td, styles.cName, { color: theme.colors.text, fontWeight: '700' }]} numberOfLines={1}>
+                  {s.symbol}
+                </Text>
+                <Text style={[styles.td, styles.cN, { color: theme.colors.textSecondary }]}>{s.n}</Text>
+                <Text style={[styles.td, styles.cWin, { color: theme.colors.text }]}>{fmtPct(s.wins / s.n)}</Text>
+                <Text style={[styles.td, styles.cMoney, { color: pColor(s.net), fontWeight: '800' }]} numberOfLines={1}>
+                  {money(s.net)}
+                </Text>
+              </View>
+            ))}
+          </View>
+          <Text style={[styles.detailTitle, { color: theme.colors.textSecondary }]}>
+            Last {recent.length} {recent.length === 1 ? 'trade' : 'trades'}
+          </Text>
+          {recent.map((t) => (
+            <View key={t.id} style={[styles.outRow, { borderTopColor: theme.colors.border }]}>
+              <View style={styles.outMain}>
+                <Text style={[styles.outSymbol, { color: theme.colors.text }]} numberOfLines={1}>
+                  {t.symbol}
+                </Text>
+                <Text style={[styles.outMeta, { color: theme.colors.textTertiary }]} numberOfLines={1}>
+                  <Text style={{ color: t.type === 0 ? theme.colors.buy : theme.colors.sell, fontWeight: '800' }}>
+                    {t.type === 0 ? 'BUY' : 'SELL'}
+                  </Text>
+                  {` · ${parseFloat(t.lots.toFixed(3))} lot`}
+                </Text>
+              </View>
+              <Text style={[styles.outMoney, { color: pColor(t.profit) }]} numberOfLines={1}>
+                {money(t.profit)}
+              </Text>
+              <Text style={[styles.outAgo, { color: theme.colors.textTertiary }]} numberOfLines={1}>
+                {timeAgo(t.closeTime, now)}
+              </Text>
+            </View>
+          ))}
+        </Animated.View>
+      )}
+    </View>
+  );
+}
+
+/** Closed MT5 trades of the selected account, grouped by who opened them. */
+function RealTradesView({
+  account,
+  range,
+  rangeLabel,
+  now,
+  theme,
+}: {
+  account: string;
+  range: Range;
+  rangeLabel: string;
+  now: number;
+  theme: Theme;
+}) {
+  const [trades, setTrades] = useState<ClosedTrade[] | null>(null);
+  const [autoSource, setAutoSource] = useState<Map<number, string>>(new Map());
+  const [currency, setCurrency] = useState('');
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    setTrades(null);
+    setExpanded(new Set());
+    const offs = [
+      onValue(
+        ref(database, `tradeHistory/${account}`),
+        (snap) => setTrades(parseTrades(snap.val())),
+        () => setTrades([]),
+      ),
+      onValue(ref(database, `autotradeLog/${account}`), (snap) => {
+        const m = new Map<number, string>();
+        snap.forEach((child) => {
+          const e = child.val();
+          if (e && e.result === 'opened' && Number(e.ticket) > 0 && typeof e.source === 'string') m.set(Number(e.ticket), e.source);
+        });
+        setAutoSource(m);
+      }),
+      onValue(ref(database, `accounts/${account}/currency`), (snap) => {
+        const c = snap.val();
+        setCurrency(typeof c === 'string' ? c : '');
+      }),
+    ];
+    return () => offs.forEach((off) => off());
+  }, [account]);
+
+  const inRange = useMemo(() => {
+    if (!trades) return [];
+    const days = RANGE_DAYS[range];
+    if (days == null) return trades;
+    const cutoff = now - days * DAY;
+    return trades.filter((t) => t.closeTime >= cutoff);
+  }, [trades, range, now]);
+  const groups = useMemo(() => groupTrades(inRange, autoSource), [inRange, autoSource]);
+
+  if (trades === null) return <ActivityIndicator style={{ marginTop: 40 }} size="large" color={theme.colors.primary} />;
+  if (inRange.length === 0) {
+    return (
+      <View style={styles.empty}>
+        <IconSymbol name="chart.bar.fill" size={48} color={theme.colors.textTertiary} />
+        <Text style={[styles.emptyTitle, { color: theme.colors.textSecondary }]}>No trades closed in the {rangeLabel}.</Text>
+      </View>
+    );
+  }
+
+  const all = groupTrades(inRange, new Map()).reduce(
+    (a, g) => ({ n: a.n + g.n, wins: a.wins + g.wins, net: a.net + g.net, grossWin: a.grossWin + g.grossWin, grossLoss: a.grossLoss + g.grossLoss }),
+    { n: 0, wins: 0, net: 0, grossWin: 0, grossLoss: 0 },
+  );
+  const money = (v: number) => `${v > 0 ? '+' : v < 0 ? '-' : ''}${formatMoney(Math.abs(v), currency)}`;
+  const pColor = (v: number) => (v > 0 ? theme.colors.profit : v < 0 ? theme.colors.loss : theme.colors.textSecondary);
+  const untagged = groups.some((g) => g.kind === 'unknown');
+  const toggle = (key: string) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+
+  return (
+    <>
+      <View style={[styles.card, styles.summaryCard, { backgroundColor: theme.colors.card }]}>
+        <View style={styles.summaryHead}>
+          <Text style={[styles.summaryTitle, { color: theme.colors.textSecondary }]}>
+            REAL TRADES · {rangeLabel.toUpperCase()}
+          </Text>
+        </View>
+        <View style={styles.summaryRow}>
+          <Stat label="TRADES" value={String(all.n)} theme={theme} />
+          <Stat label="WIN RATE" value={fmtPct(all.n ? all.wins / all.n : 0)} theme={theme} />
+          <Stat label="PF" value={tradePF(all)} theme={theme} />
+          <Stat label="NET P/L" value={money(all.net)} color={pColor(all.net)} theme={theme} />
+        </View>
+      </View>
+
+      <Text style={[styles.sectionHeader, { color: theme.colors.textSecondary }]}>By who opened it</Text>
+      {groups.map((g) => (
+        <TradeGroupCard
+          key={g.key}
+          group={g}
+          currency={currency}
+          expanded={expanded.has(g.key)}
+          onToggle={() => toggle(g.key)}
+          now={now}
+          theme={theme}
+        />
+      ))}
+
+      <Text style={[styles.legend, { color: theme.colors.textTertiary }]}>
+        Closed trades from MT5 (the Bridge sends the last 30 days); P/L includes swap and commission. Auto trades are
+        split by the signal that opened them; other EAs by their magic number, named by their trade comment.
+        {untagged ? ' "Not tagged" trades closed before the Bridge started recording which EA opened them.' : ''}
+      </Text>
+    </>
+  );
+}
+
 /* --------------------------------- screen --------------------------------- */
 
 export default function ScorecardScreen() {
@@ -420,6 +845,8 @@ export default function ScorecardScreen() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [range, setRange] = useState<Range>('All');
+  // Signals = every signal's paper result (signalLog); Trades = the account's real closed trades.
+  const [view, setView] = useState<'signals' | 'trades'>('signals');
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   // Ticks each minute so the range cut-off and "x ago" labels stay current.
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
@@ -579,7 +1006,31 @@ export default function ScorecardScreen() {
 
       <ScrollView contentContainerStyle={styles.content}>
         <AccountSelector />
-        {renderBody()}
+        <View style={[styles.viewSeg, { backgroundColor: theme.colors.input }]}>
+          {(
+            [
+              ['signals', 'Signals (paper)'],
+              ['trades', 'Real trades'],
+            ] as const
+          ).map(([v, label]) => {
+            const active = view === v;
+            return (
+              <TouchableOpacity
+                key={v}
+                style={[styles.viewSegBtn, active && { backgroundColor: theme.colors.primary }]}
+                onPress={() => setView(v)}
+                accessibilityRole="button"
+                accessibilityState={{ selected: active }}>
+                <Text style={[styles.viewSegText, { color: active ? '#FFF' : theme.colors.textSecondary }]}>{label}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+        {view === 'trades' && selectedAccount ? (
+          <RealTradesView account={selectedAccount} range={range} rangeLabel={rangeLabel} now={now} theme={theme} />
+        ) : (
+          renderBody()
+        )}
       </ScrollView>
     </SafeAreaView>
   );
@@ -588,6 +1039,32 @@ export default function ScorecardScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+  },
+  viewSeg: {
+    flexDirection: 'row',
+    borderRadius: 10,
+    padding: 3,
+    marginBottom: 14,
+  },
+  viewSegBtn: {
+    flex: 1,
+    borderRadius: 8,
+    paddingVertical: 8,
+    alignItems: 'center',
+  },
+  viewSegText: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  cMoney: {
+    width: 92,
+    textAlign: 'right',
+  },
+  outMoney: {
+    width: 86,
+    textAlign: 'right',
+    fontSize: 14,
+    fontWeight: '800',
   },
   filterRow: {
     flexDirection: 'row',

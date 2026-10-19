@@ -1,6 +1,8 @@
 # Command0r terminal watchdog - started hidden at Windows logon (Startup folder).
 #
-#  * Launches the HFM and Deriv MT5 terminals if they aren't running.
+#  * Launches the HFM, HFM2 (second HFM account, a copy of the HFM install in
+#    C:\MT5\HFM2), Deriv and Deriv2 (second Deriv account, a copy of the Deriv install in
+#    C:\MT5\Deriv2) MT5 terminals if they aren't running.
 #  * Relaunches a terminal that crashed or was killed (no clean "shutdown" line in
 #    its journal since it last started).
 #  * Leaves a terminal closed if YOU closed it normally (X / File > Exit); it comes
@@ -20,8 +22,12 @@ $MinGapSec = 300     # at most one relaunch per terminal per 5 min (no crash loo
 $Terminals = @(
   @{ Name = 'HFM';   Exe = 'C:\Program Files\HFM Metatrader 5\terminal64.exe'
      Data = Join-Path $env:APPDATA 'MetaQuotes\Terminal\E3E3B02889D32F38295D39BF94B6AD4A' },
+  @{ Name = 'HFM2';  Exe = 'C:\MT5\HFM2\terminal64.exe'
+     Data = Join-Path $env:APPDATA 'MetaQuotes\Terminal\2DFA8B2F4D51C1FB045A75634AD775B6' },
   @{ Name = 'Deriv'; Exe = 'C:\Program Files\MetaTrader 5\terminal64.exe'
-     Data = Join-Path $env:APPDATA 'MetaQuotes\Terminal\D0E8209F77C8CF37AD8BF550E51FF075' }
+     Data = Join-Path $env:APPDATA 'MetaQuotes\Terminal\D0E8209F77C8CF37AD8BF550E51FF075' },
+  @{ Name = 'Deriv2'; Exe = 'C:\MT5\Deriv2\terminal64.exe'
+     Data = Join-Path $env:APPDATA 'MetaQuotes\Terminal\C8E4AD23303C45C0BD4AD162157EE500' }
 )
 
 function Write-Log([string]$msg) {

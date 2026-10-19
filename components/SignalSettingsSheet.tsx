@@ -17,6 +17,9 @@ import { authReady, database } from '@/firebaseConfig';
 import { useTheme, type Theme } from '@/contexts/ThemeContext';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { showAlert } from '@/components/AppDialog';
+import { AutoTradeSection } from '@/components/AutoTradeSection';
+import { terminalLabel } from '@/components/TerminalStatus';
+import { GRADES, type Grade } from '@/constants/types';
 
 type IconName = React.ComponentProps<typeof IconSymbol>['name'];
 
@@ -30,6 +33,8 @@ type IconName = React.ComponentProps<typeof IconSymbol>['name'];
  *                                                          day (0-1439, start > end wraps
  *                                                          midnight); tzOffsetMin = minutes
  *                                                          to ADD to UTC for local time
+ *   zonesMinGrade: 'A' | 'B' | 'C'                        lowest zone-signal grade that pushes
+ *                                                          and auto trades (missing = 'C' = every grade)
  *
  * Source AND symbol keys use the EAs' SignalLib_SymbolKey rule (each of
  * space . $ # [ ] / becomes '_'), e.g. "Supply/Demand" -> "Supply_Demand",
@@ -38,7 +43,7 @@ type IconName = React.ComponentProps<typeof IconSymbol>['name'];
 
 /** Real `source` values the signal EAs publish; merged with whatever the feed and log show. */
 export const DEFAULT_SIGNAL_SOURCES = [
-  'Zones',
+  'Zones',            // M3 CHoCH / BOS (A), M5 engulfing (B) / sweep (C since 2026-10-07); one stream since 2026-10-05
   'Supply/Demand',
   'Support/Resistance',
   'Range Breakout',
@@ -52,8 +57,14 @@ export const WATCHDOG_SOURCE = 'Watchdog';
 /** The zone EA's proximity pushes (approaching / tested / broken) — separate from its "Zones" signals, no feed. */
 export const ZONE_ALERTS_SOURCE = 'Zone alerts';
 
+/** The zone refresh's "drafts ready to review" pushes (the PC script reads this flag before pushing). */
+export const ZONE_DRAFTS_SOURCE = 'Zone drafts';
+
+/** The Bridge EA's "auto trade opened / failed" pushes. */
+export const AUTO_TRADES_SOURCE = 'Auto trades';
+
 /** Push-only sources: they never appear in the feed, so they get their own toggles. */
-const PUSH_ONLY_SOURCES = [WATCHDOG_SOURCE, ZONE_ALERTS_SOURCE];
+const PUSH_ONLY_SOURCES = [WATCHDOG_SOURCE, ZONE_ALERTS_SOURCE, ZONE_DRAFTS_SOURCE, AUTO_TRADES_SOURCE];
 
 export interface SourcePrefs {
   notify?: boolean;
@@ -72,9 +83,17 @@ export interface SignalPrefs {
   sources: Record<string, SourcePrefs>;
   mutedSymbols: Record<string, boolean>;
   quiet: QuietPrefs | null;
+  zonesMinGrade: Grade;
 }
 
-export const EMPTY_SIGNAL_PREFS: SignalPrefs = { sources: {}, mutedSymbols: {}, quiet: null };
+export const EMPTY_SIGNAL_PREFS: SignalPrefs = { sources: {}, mutedSymbols: {}, quiet: null, zonesMinGrade: 'C' };
+
+/** Zone-signal push levels; the zone EA pushes grades at or above the stored one. */
+const GRADE_PUSH_OPTIONS: { value: Grade; label: string }[] = [
+  { value: 'A', label: 'Grade A only' },
+  { value: 'B', label: 'A + B' },
+  { value: 'C', label: 'All grades' },
+];
 
 const PREFS_PATH = 'prefs/signals';
 const DAY_MIN = 24 * 60;
@@ -136,7 +155,11 @@ function normalizePrefs(val: any): SignalPrefs {
         }
       : null;
 
-  return { sources, mutedSymbols, quiet };
+  const zonesMinGrade: Grade = (GRADES as readonly string[]).includes(val?.zonesMinGrade)
+    ? (val.zonesMinGrade as Grade)
+    : 'C';
+
+  return { sources, mutedSymbols, quiet, zonesMinGrade };
 }
 
 /** Live `prefs/signals`, attached once signed in. */
@@ -187,6 +210,8 @@ export function saveMutedSymbolKey(key: string, muted: boolean) {
 
 export const saveSymbolMuted = (symbol: string, muted: boolean) =>
   saveMutedSymbolKey(symbolKeyFor(symbol), muted);
+
+export const saveZonesMinGrade = (grade: Grade) => set(ref(database, `${PREFS_PATH}/zonesMinGrade`), grade);
 
 function saveQuiet(q: { enabled: boolean; start: number; end: number }) {
   return update(ref(database, `${PREFS_PATH}/quiet`), {
@@ -405,6 +430,13 @@ export function SignalSettingsSheet({ visible, onClose, prefs, account, feedSour
     );
   };
 
+  const setMinGrade = (grade: Grade) => {
+    Haptics.selectionAsync().catch(() => {});
+    saveZonesMinGrade(grade).catch(() =>
+      showAlert('Error', 'Could not save that setting. Check your connection.'),
+    );
+  };
+
   const unmute = (key: string) => {
     Haptics.selectionAsync().catch(() => {});
     saveMutedSymbolKey(key, false).catch(() =>
@@ -539,6 +571,42 @@ export function SignalSettingsSheet({ visible, onClose, prefs, account, feedSour
               ))}
             </View>
 
+            {/* Auto trade (per account): the Bridge EA opens these sources' new signals by itself */}
+            <SectionTitle
+              icon="bolt.fill"
+              title={account ? `Auto trade · ${terminalLabel(account)}` : 'Auto trade'}
+              theme={theme}
+            />
+            <AutoTradeSection account={account} sources={sources} />
+
+            {/* Zone signals: which grades push and auto trade. Every grade still shows in the feed. */}
+            <SectionTitle icon="square.stack.3d.up" title="Zone signal grades" theme={theme} />
+            <View style={[styles.group, styles.quietGroup, { borderColor: theme.colors.border }]}>
+              <Text style={[styles.rowSub, { color: theme.colors.textSecondary, marginTop: 0 }]}>
+                Pushes and auto trades use these grades; every grade still shows in the feed. A = structure
+                turned in the zone (M3 CHoCH or BOS), B = engulfing, C = sweep, or an engulfing that broke
+                through the zone.
+              </Text>
+              <View style={[styles.segment, { backgroundColor: theme.colors.input }]}>
+                {GRADE_PUSH_OPTIONS.map((o) => {
+                  const active = prefs.zonesMinGrade === o.value;
+                  return (
+                    <TouchableOpacity
+                      key={o.value}
+                      style={[styles.segmentBtn, active && { backgroundColor: theme.colors.primary }]}
+                      onPress={() => setMinGrade(o.value)}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected: active }}
+                      accessibilityLabel={`Zone signal grades: ${o.label}`}>
+                      <Text style={[styles.segmentText, { color: active ? '#FFF' : theme.colors.textSecondary }]}>
+                        {o.label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </View>
+
             {/* Push-only alerts: zone proximity (zone EA) and terminal health (cloud watchdog) */}
             <SectionTitle icon="cpu" title="Alerts" theme={theme} />
             <View style={[styles.group, styles.rowGroup, { borderColor: theme.colors.border }]}>
@@ -554,6 +622,36 @@ export function SignalSettingsSheet({ visible, onClose, prefs, account, feedSour
                 trackColor={switchTrack}
                 thumbColor="#FFF"
                 accessibilityLabel="Zone alerts"
+              />
+            </View>
+            <View style={[styles.group, styles.rowGroup, { borderColor: theme.colors.border, marginTop: 8 }]}>
+              <View style={styles.rowGroupText}>
+                <Text style={[styles.rowTitle, { color: theme.colors.text }]}>Zone drafts ready</Text>
+                <Text style={[styles.rowSub, { color: theme.colors.textSecondary }]}>
+                  New zone drafts to approve (after each refresh, or when a choppy zone is retired).
+                </Text>
+              </View>
+              <Switch
+                value={isSourceNotifying(prefs, ZONE_DRAFTS_SOURCE)}
+                onValueChange={(v) => toggleSource(ZONE_DRAFTS_SOURCE, 'notify', v)}
+                trackColor={switchTrack}
+                thumbColor="#FFF"
+                accessibilityLabel="Zone drafts ready"
+              />
+            </View>
+            <View style={[styles.group, styles.rowGroup, { borderColor: theme.colors.border, marginTop: 8 }]}>
+              <View style={styles.rowGroupText}>
+                <Text style={[styles.rowTitle, { color: theme.colors.text }]}>Auto trades</Text>
+                <Text style={[styles.rowSub, { color: theme.colors.textSecondary }]}>
+                  When the Bridge EA opens an auto trade, or the broker rejects one.
+                </Text>
+              </View>
+              <Switch
+                value={isSourceNotifying(prefs, AUTO_TRADES_SOURCE)}
+                onValueChange={(v) => toggleSource(AUTO_TRADES_SOURCE, 'notify', v)}
+                trackColor={switchTrack}
+                thumbColor="#FFF"
+                accessibilityLabel="Auto trades"
               />
             </View>
             <View style={[styles.group, styles.rowGroup, { borderColor: theme.colors.border, marginTop: 8 }]}>
@@ -791,6 +889,22 @@ const styles = StyleSheet.create({
   },
   quietGroup: {
     padding: 12,
+  },
+  segment: {
+    flexDirection: 'row',
+    borderRadius: 10,
+    padding: 3,
+    marginTop: 10,
+  },
+  segmentBtn: {
+    flex: 1,
+    borderRadius: 8,
+    paddingVertical: 8,
+    alignItems: 'center',
+  },
+  segmentText: {
+    fontSize: 13,
+    fontWeight: '700',
   },
   quietHead: {
     flexDirection: 'row',

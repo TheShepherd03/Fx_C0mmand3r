@@ -3,7 +3,9 @@
 //|         Shared Firebase signal publisher for FX Commander         |
 //|  Include this in any "signal-only" EA. It handles anonymous auth  |
 //|  and exposes PublishSignal(...) to append a signal (with SL/TP)   |
-//|  to the app's Market Signals feed. These EAs never place trades.  |
+//|  to the app's Market Signals feed. These EAs never place trades:  |
+//|  new setups are handed to the Bridge EA, which auto-trades them   |
+//|  only for sources the user switched on (SignalLib_HandOff).       |
 //+------------------------------------------------------------------+
 #ifndef __FXC_SIGNALLIB_MQH__
 #define __FXC_SIGNALLIB_MQH__
@@ -46,6 +48,7 @@ struct SL_Tracked
    datetime lastLivePush; // throttle for currentPrice pushes
    string   source;     // publishing strategy (for the outcome log / scorecard)
    string   tag;        // optional sub-type, e.g. Zones confirmation "sweep"
+   string   extra;      // extra JSON fields ("grade":"A","touch":1,...) copied to the outcome log
    int      confidence;
    datetime openedAt;   // UTC; when this setup first appeared
 };
@@ -54,6 +57,9 @@ SL_Tracked g_sl_tracked[];
 // --- Notification preferences (prefs/signals), cached --------------------
 string   g_sl_prefs     = "";   // raw JSON of prefs/signals ("" = none / defaults)
 datetime g_sl_prefsAt   = 0;
+
+// When this EA instance started (UTC): tells a fresh setup from one a restarted EA announces again.
+datetime g_sl_startedAt = 0;
 
 //+------------------------------------------------------------------+
 //| Extract a value for `key` from raw JSON (quoted or bare).         |
@@ -254,13 +260,34 @@ void SignalLib_LoadCredsIfBlank()
    Print("SignalLib creds loaded: lines=", gc, " emailLen=", StringLen(g_sl_email), " pwLen=", StringLen(g_sl_password));
 }
 
+//+------------------------------------------------------------------+
+//| An account in a currency other than USD (ZAR at HFM / Swyft) gets  |
+//| trade values through the account-currency pairs (USDZAR, EURZAR...).|
+//| Brokers keep those out of Market Watch; while they aren't loaded,  |
+//| OrderCalcProfit fails and the tick value is 0, so the app can't    |
+//| size the risk ("risk not available"). Load them at start.          |
+//+------------------------------------------------------------------+
+void SignalLib_SelectConversionSymbols()
+{
+   string acc = AccountInfoString(ACCOUNT_CURRENCY);
+   if(acc == "" || acc == "USD") return;
+   int total = SymbolsTotal(false);
+   for(int i = 0; i < total; i++)
+   {
+      string s = SymbolName(i, false);
+      if(StringFind(s, acc) >= 0) SymbolSelect(s, true);
+   }
+}
+
 bool SignalLib_Init(string projectId, string apiKey, string email, string password)
 {
+   SignalLib_SelectConversionSymbols();
    g_sl_projectId = projectId;
    g_sl_apiKey    = apiKey;
    g_sl_email     = email;
    g_sl_password  = password;
    g_sl_accountId = SignalLib_AccountID();
+   g_sl_startedAt = TimeGMT();
    // Temporary unauthenticated bypass (flag file present) — skip all auth.
    if(FileIsExist(FXC_NOAUTH_FILE))
    {
@@ -448,12 +475,104 @@ double SignalLib_MoneyPerTick(string symbol)
    if(ts > 0 && px > 0 &&
       OrderCalcProfit(ORDER_TYPE_BUY, symbol, 1.0, px, px - ts, loss) && loss != 0.0)
       return MathAbs(loss);
-   return SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE); // fallback
+   double tv = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE); // fallback
+   if(tv <= 0) Print("SignalLib: no tick value for ", symbol, " (", AccountInfoString(ACCOUNT_CURRENCY),
+                     " conversion pair not loaded?) - the app can't size this signal's risk");
+   return tv;
+}
+
+// Deterministic Firebase key per (source, symbol): a restart overwrites the SAME node
+// instead of orphaning it, and there's at most one live signal per symbol per source.
+string SignalLib_SignalKey(string source, string symbol)
+{
+   string key = source + "_" + symbol;
+   StringReplace(key, ".", "_"); StringReplace(key, "$", "_"); StringReplace(key, "#", "_");
+   StringReplace(key, "[", "_"); StringReplace(key, "]", "_"); StringReplace(key, "/", "_");
+   StringReplace(key, " ", "_");
+   return key;
+}
+
+// true while this EA's last signal for (source, symbol) is still open (not yet hit
+// SL/TP or expired, as of the last SignalLib_Prune). Lets an EA keep that signal
+// instead of silently replacing its levels with a repeat trigger.
+bool SignalLib_IsLive(string source, string symbol)
+{
+   string key = SignalLib_SignalKey(source, symbol);
+   for(int t = 0; t < ArraySize(g_sl_tracked); t++) if(g_sl_tracked[t].key == key) return true;
+   return false;
+}
+
+//+------------------------------------------------------------------+
+//| Last publish per signal key, kept in MQL5\Files across restarts:  |
+//|   fxc_pub_<key>.txt = "action|expiresAt|publishedAt"  (UTC; a     |
+//|   closed signal - SL/TP hit or expired - has expiresAt 0).        |
+//| EAs lose their state on a restart and announce what they see on   |
+//| their first bar again (DriftRegime re-sends its current regime).  |
+//| The first publish after a start, in the same direction as one    |
+//| published before the start that is still open or under 6 h old,  |
+//| is that same setup announced again: it refreshes the feed but is  |
+//| never handed to the Bridge for auto trade.                        |
+//+------------------------------------------------------------------+
+#define FXC_REANNOUNCE_SEC (6 * 3600)
+
+string SignalLib_PubFile(string key) { return "fxc_pub_" + key + ".txt"; }
+
+void SignalLib_SavePub(string key, string action, long expiresAt, long publishedAt)
+{
+   int h = FileOpen(SignalLib_PubFile(key), FILE_WRITE | FILE_TXT | FILE_ANSI | FILE_SHARE_READ | FILE_SHARE_WRITE);
+   if(h == INVALID_HANDLE) return;
+   FileWriteString(h, action + "|" + IntegerToString(expiresAt) + "|" + IntegerToString(publishedAt) + "\n");
+   FileClose(h);
+}
+
+bool SignalLib_IsReannounce(string key, string action)
+{
+   int h = FileOpen(SignalLib_PubFile(key), FILE_READ | FILE_TXT | FILE_ANSI | FILE_SHARE_READ | FILE_SHARE_WRITE);
+   if(h == INVALID_HANDLE) return false;
+   string ln = FileReadString(h);
+   FileClose(h);
+   string p[];
+   if(StringSplit(ln, '|', p) < 3 || p[0] != action) return false;
+   long expiresAt = StringToInteger(p[1]), publishedAt = StringToInteger(p[2]), now = (long)TimeGMT();
+   if(publishedAt >= (long)g_sl_startedAt) return false;            // published by this run: normal rules
+   return expiresAt > now || now - publishedAt < FXC_REANNOUNCE_SEC;
+}
+
+//+------------------------------------------------------------------+
+//| Hand a NEW setup to the Bridge EA running in this same terminal,  |
+//| which auto-trades it if the user switched auto trade on for this  |
+//| source in the app. Local file in MQL5\Files - no network, no      |
+//| polling of the feed. One file per setup, written under a temp     |
+//| name and renamed so the Bridge never reads a half-written line:   |
+//|   v1|key|source|symbol|action|entry|sl|tp|grade|utcSeconds        |
+//+------------------------------------------------------------------+
+void SignalLib_HandOff(string key, string source, string symbol, string action,
+                       double entry, double sl, double tp, string extraJson)
+{
+   int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+   string grade = (extraJson != "") ? SignalLib_ExtractJson("{" + extraJson + "}", "grade") : "";
+   string utc = IntegerToString((long)TimeGMT());
+   string line = "v1|" + key + "|" + source + "|" + symbol + "|" + action + "|" +
+                 DoubleToString(entry, digits) + "|" + DoubleToString(sl, digits) + "|" +
+                 DoubleToString(tp, digits) + "|" + grade + "|" + utc;
+   string tmp = "fxc_tmp_" + utc + "_" + key + ".txt";
+   int h = FileOpen(tmp, FILE_WRITE | FILE_TXT | FILE_ANSI | FILE_SHARE_READ | FILE_SHARE_WRITE);
+   if(h == INVALID_HANDLE) { Print("SignalLib: hand-off file failed (", GetLastError(), ")"); return; }
+   FileWriteString(h, line + "\n");
+   FileClose(h);
+   if(!FileMove(tmp, 0, "fxc_at_" + utc + "_" + key + ".txt", FILE_REWRITE))
+   {
+      Print("SignalLib: hand-off rename failed (", GetLastError(), ")");
+      FileDelete(tmp);
+   }
 }
 
 bool PublishSignal(string symbol, string action, double entry, double sl, double tp,
                    double lots, string source, int confidence, int expirySeconds,
-                   string tag = "")   // optional sub-type, e.g. Zones confirmation "sweep"
+                   string tag = "",        // optional sub-type, e.g. Zones confirmation "sweep"
+                   string extraJson = "",  // extra fields for the app + outcome log, e.g. "grade":"A","touch":1
+                   bool   notify = true,   // false = publish to the feed without a push
+                   string pushNote = "")   // replaces "(tag)" in the push body, e.g. "Grade A - reject" (ASCII)
 {
    if(!SignalLib_EnsureAuth()) { Print("SignalLib: no auth, skipping signal"); return false; }
 
@@ -476,15 +595,16 @@ bool PublishSignal(string symbol, string action, double entry, double sl, double
    o.Add("expiresAt",  (int)(TimeGMT() + expirySeconds)); // (TimeCurrent = broker time, ahead of UTC on HFM)
    string body = o.ToString();
    delete o;
+   if(extraJson != "")                      // splice the extra fields into the object
+   {
+      int rb = StringLen(body) - 1;
+      while(rb > 0 && StringGetCharacter(body, rb) != '}') rb--;
+      if(rb > 0) body = StringSubstr(body, 0, rb) + "," + extraJson + "}";
+   }
 
-   // Deterministic key per (source, symbol): a restart overwrites the SAME node
-   // instead of orphaning it, and there's at most one live signal per symbol per
-   // source (no unbounded accumulation). Replacing the whole node also clears the
-   // app's dismissed/snoozedUntil flags, so a NEW setup always shows again.
-   string key = source + "_" + symbol;
-   StringReplace(key, ".", "_"); StringReplace(key, "$", "_"); StringReplace(key, "#", "_");
-   StringReplace(key, "[", "_"); StringReplace(key, "]", "_"); StringReplace(key, "/", "_");
-   StringReplace(key, " ", "_");
+   // One node per (source, symbol), no unbounded accumulation. Replacing the whole
+   // node also clears the app's dismissed/snoozedUntil flags, so a NEW setup always shows again.
+   string key = SignalLib_SignalKey(source, symbol);
 
    // Root-level multi-path PATCH ("account/key": node): with the ~905-char token even
    // signals/{account}.json sits right at MQL's ~1024-char URL limit on HFM's long id.
@@ -508,6 +628,7 @@ bool PublishSignal(string symbol, string action, double entry, double sl, double
                         MathAbs(g_sl_tracked[idx].tp - tp) > pt * 0.5;
       g_sl_tracked[idx].source     = source;
       g_sl_tracked[idx].tag        = tag;
+      g_sl_tracked[idx].extra      = extraJson;
       g_sl_tracked[idx].confidence = confidence;
       if(freshSetup) g_sl_tracked[idx].openedAt = TimeGMT();
       g_sl_tracked[idx].key       = key;
@@ -520,10 +641,21 @@ bool PublishSignal(string symbol, string action, double entry, double sl, double
       g_sl_tracked[idx].status    = "pending";
       g_sl_tracked[idx].lastLivePush = 0;   // 0 => first prune pushes live price immediately
       Print("Signal published: ", source, " ", symbol, " ", action, " @", entry);
+      // A new setup goes to the Bridge for auto trade - not a re-publish of the same levels,
+      // and not a setup this EA already announced before it (re)started.
+      // (A re-announcement leaves the record as it was, so a duplicate copy of this EA on the
+      // same chart sees the same pre-start publish and holds back too.)
+      bool reannounce = SignalLib_IsReannounce(key, action);
+      if(!reannounce) SignalLib_SavePub(key, action, (long)TimeGMT() + expirySeconds, (long)TimeGMT());
+      if(freshSetup && !reannounce)
+         SignalLib_HandOff(key, source, symbol, action, entry, sl, tp, extraJson);
+      else if(freshSetup)
+         Print("SignalLib: ", source, " ", action, " ", symbol, " was already announced before this EA started - not handed to auto trade");
       // Push-notify only the first time this setup appears (not on re-publishes).
-      if(isNew)
+      if(isNew && notify)
          SignalLib_NotifyFor(source, symbol, action + " " + symbol,
-                             source + (tag != "" ? " (" + tag + ")" : "") + "  @ " + DoubleToString(entry, digits) +
+                             source + (pushNote != "" ? " - " + pushNote : (tag != "" ? " (" + tag + ")" : "")) +
+                             "  @ " + DoubleToString(entry, digits) +
                              "  SL " + DoubleToString(sl, digits) + "  TP " + DoubleToString(tp, digits),
                              "{\"screen\":\"signals\",\"account\":\"" + g_sl_accountId + "\"}");
    }
@@ -592,7 +724,8 @@ void SignalLib_LogOutcome(int i, string outcome, double exitPrice)
                 "\"closedAt\":" + IntegerToString(closedAt) + "," +
                 "\"outcome\":\"" + outcome + "\"," +
                 "\"exitPrice\":" + DoubleToString(exitPrice, dg) + "," +
-                "\"r\":" + DoubleToString(r, 3) + "}";
+                "\"r\":" + DoubleToString(r, 3) +
+                (g_sl_tracked[i].extra != "" ? "," + g_sl_tracked[i].extra : "") + "}";
    // Keyed by the minute the setup opened: duplicate EA instances on one symbol
    // (same source, same setup) overwrite one record instead of double-counting.
    long openedMin = ((long)g_sl_tracked[i].openedAt > 0 ? (long)g_sl_tracked[i].openedAt : closedAt) / 60 * 60;
@@ -659,6 +792,7 @@ void SignalLib_Prune()
          }
          SignalLib_LogOutcome(i, outcome, exitPx);
          SignalLib_Delete(g_sl_tracked[i].key);
+         SignalLib_SavePub(g_sl_tracked[i].key, g_sl_tracked[i].action, 0, (long)g_sl_tracked[i].openedAt);   // closed
          for(int j = i; j < ArraySize(g_sl_tracked) - 1; j++) g_sl_tracked[j] = g_sl_tracked[j+1];
          ArrayResize(g_sl_tracked, ArraySize(g_sl_tracked) - 1);
          continue;

@@ -53,6 +53,7 @@ async function registerForPush(): Promise<string | null> {
 // EAs name the target screen in the push `data`:
 //   { screen: 'zones', symbol: 'Volatility 10 Index' } -> Zones tab, that symbol preselected
 //   { screen: 'signals' }                              -> Signals tab
+//   { screen: 'positions' } (Bridge auto trade)        -> Portfolio
 //   { screen: 'home' }  (cloud terminal watchdog)      -> Dashboard
 //   anything else / no data                            -> just open the app (no navigation)
 
@@ -83,6 +84,8 @@ function hrefForPush(data: Record<string, unknown>): Href | null {
     }
     case 'signals':
       return '/(tabs)/signals';
+    case 'positions':
+      return '/(tabs)/positions';
     case 'home':
       return '/(tabs)';
     default:

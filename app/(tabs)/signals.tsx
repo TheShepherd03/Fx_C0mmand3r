@@ -7,10 +7,12 @@ import { ref, query, orderByChild, limitToLast, onValue, set, update } from 'fir
 import { AccountSelector } from '@/components/AccountSelector';
 import { useAccount } from '@/contexts/AccountContext';
 import { useTheme } from '@/contexts/ThemeContext';
-import { Signal } from '@/constants/types';
+import { Signal, touchLabel, trendLabel } from '@/constants/types';
+import { EmaPosition } from '@/components/EmaPosition';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { ExecuteSignalModal } from '@/components/ExecuteSignalModal';
 import { useAccountData } from '@/hooks/useAccountData';
+import { useAutoTradeLog, type AutoTradeLogEntry } from '@/hooks/useAutoTrade';
 import { SwipeToDismiss } from '@/components/SwipeToDismiss';
 import { SignalActionSheet, type SignalAction } from '@/components/SignalActionSheet';
 import { UndoToast, type ToastData } from '@/components/UndoToast';
@@ -67,6 +69,19 @@ export default function SignalsScreen() {
   // would overwrite an 'executed'/'rejected' flag, making the signal reappear.
   const [actedIds, setActedIds] = useState<Set<string>>(new Set());
   const { data: acctData } = useAccountData();
+
+  // Signals the Bridge EA already opened as auto trades (same key AND levels: a newer
+  // signal on the same key is a different setup), so they aren't executed twice by hand.
+  const autoLog = useAutoTradeLog(selectedAccount);
+  const autoTradeFor = (item: Signal): AutoTradeLogEntry | undefined =>
+    autoLog.find(
+      (e) =>
+        e.result === 'opened' &&
+        e.signalKey === item.id &&
+        e.action === item.action &&
+        Math.abs(e.sl - item.sl) <= Math.abs(item.sl) * 1e-9 + 1e-9 &&
+        Math.abs(e.tp - item.tp) <= Math.abs(item.tp) * 1e-9 + 1e-9,
+    );
 
   // --- Inbox controls: dismiss / snooze / mute / hide source + settings -------
   const { prefs } = useSignalPrefs();
@@ -430,6 +445,16 @@ export default function SignalsScreen() {
 
     const symbolColor = getSymbolColor(item.symbol);
 
+    // Zones grade: A = structure turned in the zone (M3 CHoCH / BOS), B = engulfing / sweep,
+    // C = an engulfing that broke through the zone's far edge.
+    const gradeColor = item.grade === 'A' ? theme.colors.success
+                     : item.grade === 'B' ? theme.colors.info
+                     : theme.colors.textSecondary;
+    const gradeInfo = [
+      typeof item.touch === 'number' && item.touch > 0 ? touchLabel(item.touch) : '',
+      item.trend ? trendLabel(item.trend) : '',
+    ].filter(Boolean).join(' · ');
+
     // Where is price now, between SL and TP, and relative to the signal's entry?
     // Lets the trader judge: enter now (near entry), chase (moved toward TP), or wait.
     const hasLevels = item.sl > 0 && item.tp > 0;
@@ -445,6 +470,7 @@ export default function SignalsScreen() {
       }
     }
     const drift = pricePct !== null && entryPct !== null ? pricePct - entryPct : 0;
+    const autoTrade = autoTradeFor(item);
     const priceHint = Math.abs(drift) < 6 ? 'near entry — good to enter'
                     : drift > 0 ? 'moved toward TP — chasing' : 'pulled toward SL — can wait';
 
@@ -476,6 +502,27 @@ export default function SignalsScreen() {
                 {item.source || 'Signal Feed'}{item.tag ? ` · ${item.tag}` : ''} • {formatTime(item.timestamp)}
                 {item.expiresAt ? ` • ${expiryLabel(item.expiresAt)}` : ''}
               </Text>
+              {!!item.grade && (
+                <View style={styles.gradeRow}>
+                  <View style={[styles.gradeChip, { backgroundColor: gradeColor + '22', borderColor: gradeColor }]}>
+                    <Text style={[styles.gradeChipText, { color: gradeColor }]}>GRADE {item.grade}</Text>
+                  </View>
+                  {!!gradeInfo && (
+                    <Text style={[styles.gradeInfo, { color: theme.colors.textSecondary }]} numberOfLines={2}>
+                      {gradeInfo}
+                    </Text>
+                  )}
+                </View>
+              )}
+              {!!autoTrade && (
+                <View style={styles.gradeRow}>
+                  <View style={[styles.gradeChip, { backgroundColor: theme.colors.primary + '22', borderColor: theme.colors.primary }]}>
+                    <Text style={[styles.gradeChipText, { color: theme.colors.primary }]}>
+                      AUTO-TRADED · {parseFloat(autoTrade.lots.toFixed(3))} LOT
+                    </Text>
+                  </View>
+                </View>
+              )}
             </View>
           </View>
 
@@ -594,6 +641,9 @@ export default function SignalsScreen() {
             </Text>
           </View>
         )}
+
+        {/* Where price sits against the M3 EMA ribbon: when the signal fired, and now */}
+        <EmaPosition at={item.ema} now={item.emaNow} theme={theme} />
 
         {/* Actions (live signals are actionable whether pending or already winning) */}
         {(isPending || isWinning) && (
@@ -733,7 +783,7 @@ export default function SignalsScreen() {
         </View>
       )}
 
-      <AccountSelector />
+      <AccountSelector style={{ marginHorizontal: 16 }} />
 
       {/* Signal List */}
       <FlatList
@@ -1012,6 +1062,28 @@ const styles = StyleSheet.create({
   },
   metaText: {
     fontSize: 12,
+  },
+  gradeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 6,
+  },
+  gradeChip: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    borderWidth: 1,
+  },
+  gradeChipText: {
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.4,
+  },
+  gradeInfo: {
+    flexShrink: 1,
+    fontSize: 11,
+    fontWeight: '600',
   },
   confidenceWrapper: {
     alignItems: 'center',

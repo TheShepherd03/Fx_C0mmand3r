@@ -308,9 +308,19 @@ function buildGeometry(
   };
 }
 
+/** A zone draft awaiting approval: drawn as a cyan dashed band; `selected` = the one being reviewed. */
+export interface DraftBand {
+  high: number;
+  low: number;
+  selected?: boolean;
+}
+
+export const DRAFT_COLOR = '#00BCD4';
+
 export interface ZoneChartProps {
   candles: Candle[];
   zones: LiveZone[];
+  drafts?: DraftBand[];
   price: number | null;
   digits: number;
   height?: number;
@@ -323,7 +333,9 @@ export interface ZoneChartProps {
  * edges), and a dashed current-price line with a price tag on the right.
  * Width fills the parent (measured), height defaults to 220.
  */
-function ZoneChartImpl({ candles, zones, price, digits, height = CHART_HEIGHT }: ZoneChartProps) {
+const NO_DRAFTS: DraftBand[] = [];
+
+function ZoneChartImpl({ candles, zones, drafts = NO_DRAFTS, price, digits, height = CHART_HEIGHT }: ZoneChartProps) {
   const { theme } = useTheme();
   const { width: windowWidth } = useWindowDimensions();
   const [measured, setMeasured] = useState(0);
@@ -335,9 +347,18 @@ function ZoneChartImpl({ candles, zones, price, digits, height = CHART_HEIGHT }:
     if (w > 0 && w !== measured) setMeasured(w);
   };
 
+  // Drafts share the live zones' y-scale (they're included in the range so every
+  // proposal is visible), then get their own cyan dashed bands.
+  const allZones = useMemo<LiveZone[]>(
+    () =>
+      drafts.length
+        ? [...zones, ...drafts.map((d) => ({ high: d.high, low: d.low, role: 'demand' as const, state: 'far' as const } as LiveZone))]
+        : zones,
+    [zones, drafts]
+  );
   const geo = useMemo(
-    () => buildGeometry(candles, zones, price, digits, width, height),
-    [candles, zones, price, digits, width, height]
+    () => buildGeometry(candles, allZones, price, digits, width, height),
+    [candles, allZones, price, digits, width, height]
   );
 
   if (!geo) {
@@ -371,8 +392,20 @@ function ZoneChartImpl({ candles, zones, price, digits, height = CHART_HEIGHT }:
           />
         ))}
 
+        {/* Draft bands (awaiting approval): cyan, dashed; the one being reviewed is bolder */}
+        {geo.bands.slice(zones.length).map((b, i) => {
+          const sel = !!drafts[i]?.selected;
+          return (
+            <React.Fragment key={`draft-${i}`}>
+              <Rect x={0} y={b.y} width={geo.plotW} height={b.h} fill={DRAFT_COLOR} fillOpacity={sel ? 0.28 : 0.1} />
+              <Line x1={0} x2={geo.plotW} y1={b.y} y2={b.y} stroke={DRAFT_COLOR} strokeWidth={sel ? 2 : 1} strokeDasharray={DASH} />
+              <Line x1={0} x2={geo.plotW} y1={b.y + b.h} y2={b.y + b.h} stroke={DRAFT_COLOR} strokeWidth={sel ? 2 : 1} strokeDasharray={DASH} />
+            </React.Fragment>
+          );
+        })}
+
         {/* Zone bands */}
-        {geo.bands.map((b, i) => {
+        {geo.bands.slice(0, zones.length).map((b, i) => {
           const color = b.role === 'supply' ? down : up;
           const inside = b.state === 'inside';
           const edged = inside || b.state === 'near';

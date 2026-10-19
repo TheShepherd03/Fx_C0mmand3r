@@ -40,13 +40,13 @@ function compactAge(sec: number): string {
   return `${Math.floor(sec / 86400)}d`;
 }
 
-function healthText(health: TerminalHealth, ageSec: number): string {
+export function healthText(health: TerminalHealth, ageSec: number): string {
   if (health === 'live') return 'LIVE';
   if (health === 'stale') return `${compactAge(ageSec)} ago`;
   return `offline ${compactAge(ageSec)}`;
 }
 
-function healthColor(health: TerminalHealth, theme: Theme): string {
+export function healthColor(health: TerminalHealth, theme: Theme): string {
   if (health === 'live') return theme.colors.profit;
   if (health === 'stale') return theme.colors.warning;
   return theme.colors.loss;
@@ -70,7 +70,7 @@ export function terminalLabel(accountId: string): string {
 }
 
 // Heartbeat value -> epoch seconds (0 = missing/invalid). Tolerates epoch ms.
-function toEpochSeconds(v: unknown): number {
+export function toEpochSeconds(v: unknown): number {
   const n = typeof v === 'number' ? v : typeof v === 'string' ? Number(v) : NaN;
   if (!Number.isFinite(n) || n <= 0) return 0;
   return n > 1e12 ? Math.floor(n / 1000) : n;

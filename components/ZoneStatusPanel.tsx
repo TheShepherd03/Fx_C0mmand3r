@@ -5,6 +5,7 @@ import { useTheme, type Theme } from '@/contexts/ThemeContext';
 import {
   ZoneChart,
   type Candle,
+  type DraftBand,
   type LiveZone,
   type ZoneState,
   type ZoneStatus,
@@ -62,7 +63,16 @@ function distanceText(z: LiveZone, digits: number): string {
  * header (symbol, timeframe, ATR, price, freshness), the zone chart, and a
  * compact list of the EA's zones with role, range, state, distance and last event.
  */
-export function ZoneStatusPanel({ symbol, status }: { symbol: string; status: ZoneStatus | null }) {
+export function ZoneStatusPanel({
+  symbol,
+  status,
+  drafts,
+}: {
+  symbol: string;
+  status: ZoneStatus | null;
+  /** Zone drafts awaiting approval, drawn on the chart in cyan. */
+  drafts?: DraftBand[];
+}) {
   const { theme } = useTheme();
   const [, setTick] = useState(0);
 
@@ -123,6 +133,7 @@ export function ZoneStatusPanel({ symbol, status }: { symbol: string; status: Zo
       <ZoneChart
         candles={status?.candles ?? EMPTY_CANDLES}
         zones={status?.zones ?? EMPTY_ZONES}
+        drafts={drafts}
         price={price}
         digits={digits}
       />
@@ -131,7 +142,9 @@ export function ZoneStatusPanel({ symbol, status }: { symbol: string; status: Zo
       {status &&
         (status.zones.length === 0 ? (
           <Text style={[styles.noZones, { color: theme.colors.textTertiary }]}>
-            No zones reported by the EA yet.
+            {drafts && drafts.length > 0
+              ? 'No live zones yet. Approve a draft below to send it to the EA.'
+              : 'No zones reported by the EA yet.'}
           </Text>
         ) : (
           <View style={styles.zoneList}>
